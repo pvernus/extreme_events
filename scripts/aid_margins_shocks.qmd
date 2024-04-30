@@ -1,0 +1,491 @@
+---
+title: "Untitled"
+format: html
+editor: visual
+bibliography: references.bib
+---
+
+```{r}
+
+source(here::here('scripts', 'library.R'))
+
+load(here('data', 'delivery_channel_crs_analysis.RData'))
+load(here('data', 'em_dat_events.RData'))
+```
+
+# Estimand
+
+## Target population
+
+We remove the 'regional' recipients.
+
+```{r}
+
+data_clean <- data_clean[!grepl('regional', recipient_name)]
+```
+
+List all potential provider-recipient dyads included in the OECD CRS datasets. Two options:
+
+-   Unique, whole-period, list of dyads: same number of potential dyads each year.
+
+-   Year-specific lists of dyads: different number of potential dyads each year.
+
+Note: most of the variation comes from nonbilateral providers. Split sample between bilaterals/others?
+
+```{r}
+
+# Unique, whole-period list
+target_pop_period <- data_clean[, CJ(year, donor_name, recipient_name, unique = TRUE)]
+
+# Year-specific lists
+target_pop_years <- data_clean[, CJ(donor_name, recipient_name, unique = TRUE), by = year]
+```
+
+```{r}
+# Unique, whole-period list
+target_pop_period |> 
+  count(year) |> 
+  head()
+
+data_clean[bi_multi %in% c(1,3,7,8), # filter for bilateral providers only
+           CJ(year, donor_name, recipient_name, unique = TRUE)] |> 
+  count(year) |> 
+  head()
+```
+
+```{r}
+
+# Year-specific lists
+merge(target_pop_years |> count(year),
+      data_clean[bi_multi %in% c(1,3,7,8),  # filter for bilateral providers only
+           CJ(donor_name, recipient_name, unique = TRUE), by = year] |> 
+  count(year),
+      by = 'year') |> 
+  rename(All = n.x, Bilaterals = n.y) |> 
+  pivot_longer(-year, names_to = "Providers", values_to = "value") |> 
+  ggplot(aes(x=year, y=value, color=Providers)) + 
+  geom_line() +
+  theme_minimal() +
+  labs(x='', y='# dyads', title = 'Trend in the number of potential dyads each year')
+```
+
+--\> For now, we use the **year-specific dyads list**.
+
+P.S.
+
+-   Remove 'regional' recipients (ex: Africa, regional)?
+-   Include data on Chinese ODA from Aid Data?
+
+## Unit-specific quantity
+
+### Unit-specific
+
+For now, we focus on **provider-recipient dyads per year**.
+
+Note: later, we could disaggregate to provider-agency and recipient-sector levels.
+
+```{r}
+
+# Sum of disb. per dyad-year
+setDT(data_clean)
+qty_dyad_year <- data_clean[, .(
+  commitment = sum(usd_commitment_defl, na.rm = TRUE),
+  disbursement = sum(usd_disbursement_defl, na.rm = TRUE)),
+                     by = .(donor_name, recipient_name, year)]
+```
+
+We create a data set that includes all potential year-specific dyads to account for selection bias.
+
+```{r}
+
+# merge sum of disb to year-specific list of potential dyads
+head(target_pop_years)
+head(qty_dyad_year)
+
+estimand <- merge(target_pop_years, qty_dyad_year, 
+      by = c("donor_name", "recipient_name","year"), 
+      all.x = TRUE) # rows from x which have no matching row in y are included
+
+head(estimand)
+```
+
+```{r}
+# look at share of missing values
+estimand |> 
+  slice_sample(prop = .3) |> 
+  vis_miss()
+
+estimand[is.na(estimand)] <- 0 # replace NAs by 0
+```
+
+### Quantity
+
+We include a binary (extensive margin) and a continuous outcomes (intensive margin; to estimate ratio or semi-elasticity, for instance).
+
+```{r}
+
+estimand <- estimand[, c('commit_xmarg', 'disb_xmarg') := {
+  commit_xmarg <- ifelse(commitment != 0, 1, 0)
+  disb_xmarg <- ifelse(disbursement != 0, 1, 0)
+  list(commit_xmarg, disb_xmarg)
+}]
+
+head(estimand)
+```
+
+> Two ways to measure annual change: - Absolute change (first-difference). - Proportional change (coefficient of variation), cf. proportional treatment effect (semi-elasticity).
+
+```{r}
+
+sorted_estimand <- estimand[order(donor_name, recipient_name, year)]
+sorted_estimand[, c("diff_abs", "diff_prop") := {
+  diff_abs <- commitment - shift(commitment)
+  diff_prop <- (commitment - shift(commitment)) / shift(commitment)
+  list(diff_abs, diff_prop)
+},
+  by = .(donor_name, recipient_name)]
+```
+
+--\> For now, we use *levels*.
+
+Note: [@yotovAdvancedGuideTrade2016], p.23: adjustment to treatment, data pooled over consecutive years vs. 3/5-year intervals.
+
+# Treatment
+
+## Hazard
+
+### Types
+
+-   temperature extremes;
+
+-   heavy precipitation;
+
+-   pluvial floods;
+
+-   river floods;
+
+-   drought;
+
+-   storms (including tropical cyclones);
+
+-   compound events (multivariate and concurrent extremes)
+
+Source: [@ipcc2023]
+
+### Data source
+
+[@delforge2023]
+
+#### Inclusion criteria
+
+At least one must be fulfilled:
+
+-   10 or more human deaths;
+
+-   100 or more people injured or left homeless;
+
+-   declaration by the country of a state of emergency and/or an appeal for international assistance.
+
+#### Event classification
+
+**Natural**, incl.
+
+-   Biological;
+
+-   **Climatological**, incl.
+
+    -   **Drought**
+
+    -   Glacial lake outburst flood \<-- include in flood category (n=3)?
+
+    -   Wildfire
+
+-   Extra-terrestrial;
+
+-   Geophysical;
+
+-   **Hydrological,** incl.
+
+    -   **Flood**;
+
+    -   Mass movement (wet);
+
+    -   Wave action;
+
+-   **Meteorological**, incl.
+
+    -   **Extreme temperature**;
+
+    -   Fog;
+
+    -   **Storm**;
+
+-   Technological, incl.
+
+    -   Miscellaneous accident;
+
+    -   Transport.
+
+```{r}
+
+setDT(em_dat)
+
+# filter climate-related disasters only
+event_clim_sample <-  em_dat[grepl('nat-cli-dro|nat-hyd-flo|nat-met-ext|nat-met-sto', classification_key)]
+
+vis_dat(event_clim_sample)
+vis_miss(event_clim_sample)
+```
+
+We get a sample of 7048 climate-related disasters recorded between 2000 and 2022.
+
+> Note: other characteristics quoted in the IPCC that could be relevant for the analysis: - magnitude or intensity; - duration; - frequency; - timing; - spatial extent.
+
+# Assignment mechanism
+
+## Merge estimand and treatment data sets
+
+For now, we only consider: - the number of event(s) per year in each country and - the cumulative number of events in each country since 2000.
+
+We will add a binary variable (switching/on-off treatment) after merging with the estimand data set.
+
+Note: the choice of period covered by the analysis will impact the the cumulative number of events in each country.
+
+```{r}
+
+# create new vars 
+## event_n: number of event(s) per year in each country.
+## call_n: number of event(s) per year in each country where international assistance was requested or a state of emergency was declared.
+## appeal_n: number of event(s) per year in each country where international assistance was requested.
+## declaration_n: number of event(s) per year in each country where a state of emergency was declared.
+## event_cum: cumulative number of events in each country since 2002 (start year of the CRS data set)
+
+treatment <- event_clim_sample[year >= 2002
+][, .( # Number of events
+  event_n = .N, 
+  call_n = sum(call == "Yes"),
+  appeal_n = sum(call_type == "Appeal"),
+  declaration_n = sum(call_type == "Declaration")
+  ), 
+  by = .(country, iso, year)
+][order(country, year)
+][,`:=` ( # Cumulative number of events since 2002
+  event_cum = cumsum(event_n),
+  call_cum = cumsum(call_n),
+  appeal_cum = cumsum(appeal_n),
+  declaration_cum = cumsum(declaration_n)
+  ),
+  by = .(country, iso)
+  ]
+```
+
+Now, we merge the estimand and treatment data sets by recipient country-year pairs.
+
+We only keep countries which have received disbursements reported to the oECD. In other words, we don't include: (high-income) countries considered as bilateral donors in the CRS data set, their overseas collectivities (ex: la Réunion), and China.
+
+Note: we could include in the analysis (i) treatments of the providers; (ii) AidData's Chinese development finance data.
+
+First, we need to check that country names are similar between both data sets.
+
+```{r}
+
+full_join(distinct(data_clean, recipient_name), 
+          distinct(em_dat, country), 
+          by = c("recipient_name" = "country"), 
+          keep = T) |> 
+  arrange(country)
+
+# missing in em_dat / treatment data set: Nauru, Wallis and Futuna, Kosovo, Côte d'Ivoire, Tanzania, West Bank and Gaza Strip, China (People's Republic of), Bolivia, Venezuela, Iran, Micronesia, Mayotte
+
+# first, we merge the iso variable from the treatment data set to the estimand data set.
+estimand <- left_join(estimand, distinct(em_dat, country, iso), by = c("recipient_name" = "country")) |> 
+  mutate(iso = case_when( # we add the missing ISO
+  recipient_name == "Côte d'Ivoire" ~ 'CIV',
+  recipient_name == "Moldova" ~ 'MDA',
+  recipient_name == "Tanzania" ~ 'TZA',
+  recipient_name == "China (People's Republic of)" ~ 'CHN',
+  recipient_name == "Bolivia" ~ 'BOL',
+  recipient_name == "Venezuela" ~ 'VEN',
+  recipient_name == "Iran" ~ 'IRN',
+  recipient_name == "Kosovo" ~ 'XKX',
+  recipient_name == "Mayotte" ~ 'MYT',
+  recipient_name == "Micronesia" ~ 'FSM',
+  recipient_name == "Nauru" ~ 'NRU',
+  recipient_name == "Wallis and Futuna" ~ 'WLF',
+  recipient_name == "West Bank and Gaza Strip" ~ 'PSE',
+# we also add the ISO of three recipient countries with no observation in the em-dat (treatment) data set
+  recipient_name == "Equatorial Guinea" ~ 'GNQ',
+  recipient_name == "Montserrat" ~ 'MSR',
+  recipient_name == "Turkmenistan" ~ 'TKM',
+  .default = iso
+  )) |> 
+  relocate(iso, .after = recipient_name)
+
+# second, we merge the estimand and treatment data sets
+assignment <- merge(estimand, treatment[, !'country'], by = c("iso", "year"), all.x = T)
+setDT(assignment)
+assignment[order(recipient_name, year)]
+```
+
+```{r}
+
+head(assignment)
+
+assignment |> 
+  filter(is.na(event_n))
+
+assignment |> 
+  slice_sample(prop = .2) |> 
+#  vis_dat()
+ vis_miss()
+
+assignment[is.na(assignment)] <- 0 # replace NAs by 0
+
+assignment |> 
+  slice_sample(prop = .3) |> 
+  vis_miss()
+```
+
+We add new binary treatment variables (1 if any event during the year t in country j, 0 otherwise).
+
+```{r}
+
+assignment[, c("event_binary", "call_binary", "appeal_binary", "declaration_binary") := 
+             .(
+  ifelse(event_n %in% c(0,NA), 0, 1),
+  ifelse(call_n %in% c(0,NA), 0, 1),
+  ifelse(appeal_n %in% c(0,NA), 0, 1),
+  ifelse(declaration_n %in% c(0,NA), 0, 1)  
+             )
+]
+
+```
+
+We also add a new cohort variable which takes the first year of treatment for each country as a value.
+
+```{r}
+
+# cohort: year where the cumulative number of disasters is the lowest but different from zero.
+assignment[, c("cohort_event", "cohort_call", "cohort_appeal", "cohort_declaration") := .(
+  ifelse(sum(event_n, na.rm = T) == 0, NA_integer_, min(year[event_cum != 0])),
+  ifelse(sum(call_n, na.rm = T) == 0, NA_integer_, min(year[call_cum != 0])),
+  ifelse(sum(appeal_n, na.rm = T) == 0, NA_integer_, min(year[appeal_cum != 0])),
+  ifelse(sum(declaration_n, na.rm = T) == 0, NA_integer_, min(year[declaration_cum != 0]))
+), by = .(recipient_name, iso)]
+```
+
+We create an unique group identifier for each combination of "donor_name" and "recipient_name".
+
+```{r}
+
+assignment[, key := .GRP, by = .(donor_name, recipient_name)]
+```
+
+```{r}
+
+# checks
+distinct(data_clean, donor_name)
+distinct(assignment, donor_name)
+
+distinct(data_clean, recipient_name)
+distinct(assignment, recipient_name)
+```
+
+## Mediator
+
+Add channel of delivery variables
+
+```{r}
+
+
+```
+
+
+## Plot
+
+Convert binary outcomes variables to factors
+
+```{r}
+
+assignment <- mutate(assignment, across(ends_with('binary'), as_factor))
+```
+
+Boxplot: climate-related binary switching disasters
+
+```{r}
+
+summarize(assignment,
+  disb = sum(disbursement, na.rm = T),
+  .by = c(recipient_name, year, event_binary)) |> 
+  ggplot(aes(x = event_binary, y = log(disb), colour = event_binary)) +
+  geom_boxplot() +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  labs(x="Treatment", y="Disbursement (log)", 
+       title = "Yearly disbursements to recipient countries",
+       subtitle = "Treatment: at least one climate-related disaster recorded during the year")
+```
+
+Treatment plot
+
+```{r}
+
+## Binary switching treatment
+# pivot to wider
+plot_treat_binary <- distinct(assignment,
+         recipient_name, year, event_binary) |> 
+  mutate(event_binary = as.numeric(levels(event_binary))[event_binary]) |> 
+  pivot_wider(names_from = 'year', values_from = 'event_binary') |> 
+  rowwise() |> 
+  mutate(total = sum(c_across(`2002`:`2022`), na.rm = T)) |> 
+  ungroup() |> 
+  mutate(across(`2002`:`2022`, as.integer)) |> 
+  arrange(desc(total)) |> 
+  column_to_rownames(var="recipient_name")
+  
+## Heatmap
+# heatmap events
+pheatmap::pheatmap(plot_treat_binary |> select(-total),
+    color = c('red','blue'),
+    legend_breaks = c(0,1),
+    legend_labels = c("Not treated", "Treated"),
+    border_color = "grey90",
+    cluster_rows = FALSE,
+    cluster_cols = FALSE,
+    main = "Binary switching treatment")
+```
+
+Binary switching *call* treatment
+
+```{r}
+
+## Binary switching treatment
+# pivot to wider
+plot_call_binary <- distinct(assignment,
+         recipient_name, year, call_binary) |> 
+  mutate(call_binary = as.numeric(levels(call_binary))[call_binary]) |> 
+  pivot_wider(names_from = 'year', values_from = 'call_binary') |> 
+  rowwise() |> 
+  mutate(total = sum(c_across(`2002`:`2022`), na.rm = T)) |> 
+  ungroup() |> 
+  mutate(across(`2002`:`2022`, as.integer)) |> 
+  arrange(desc(total)) |> 
+  column_to_rownames(var="recipient_name")
+  
+## Heatmap
+# heatmap events
+pheatmap::pheatmap(plot_treat_binary |> select(-total),
+    color = c('red','blue'),
+    legend_breaks = c(0,1),
+    legend_labels = c("Not treated", "Treated"),
+    border_color = "grey90",
+    cluster_rows = FALSE,
+    cluster_cols = FALSE,
+    main = "Binary switching 'large' treatment")
+```
+
+Related articles
+
+[@reinhardt2024]
+
+[@dellmuth2021]
