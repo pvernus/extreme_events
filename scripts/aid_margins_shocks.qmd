@@ -21,10 +21,10 @@ We remove the 'regional' recipients.
 
 ```{r}
 
-data_clean <- data_clean[!grepl('regional', recipient_name)]
+data_disaster <- data_delivery[!grepl('regional', recipient_name)]
 ```
 
-List all potential provider-recipient dyads included in the OECD CRS datasets. Two options:
+We list all potential provider-recipient dyads included in the OECD CRS datasets. Two options:
 
 -   Unique, whole-period, list of dyads: same number of potential dyads each year.
 
@@ -35,10 +35,10 @@ Note: most of the variation comes from nonbilateral providers. Split sample betw
 ```{r}
 
 # Unique, whole-period list
-target_pop_period <- data_clean[, CJ(year, donor_name, recipient_name, unique = TRUE)]
+target_pop_period <- data_disaster[, CJ(year, donor_name, recipient_name, unique = TRUE)]
 
 # Year-specific lists
-target_pop_years <- data_clean[, CJ(donor_name, recipient_name, unique = TRUE), by = year]
+target_pop_years <- data_disaster[, CJ(donor_name, recipient_name, unique = TRUE), by = year]
 ```
 
 ```{r}
@@ -47,7 +47,7 @@ target_pop_period |>
   count(year) |> 
   head()
 
-data_clean[bi_multi %in% c(1,3,7,8), # filter for bilateral providers only
+data[bi_multi %in% c(1,3,7,8), # filter for bilateral providers only
            CJ(year, donor_name, recipient_name, unique = TRUE)] |> 
   count(year) |> 
   head()
@@ -57,7 +57,7 @@ data_clean[bi_multi %in% c(1,3,7,8), # filter for bilateral providers only
 
 # Year-specific lists
 merge(target_pop_years |> count(year),
-      data_clean[bi_multi %in% c(1,3,7,8),  # filter for bilateral providers only
+      data_disaster[bi_multi %in% c(1,3,7,8),  # filter for bilateral providers only
            CJ(donor_name, recipient_name, unique = TRUE), by = year] |> 
   count(year),
       by = 'year') |> 
@@ -87,8 +87,8 @@ Note: later, we could disaggregate to provider-agency and recipient-sector level
 ```{r}
 
 # Sum of disb. per dyad-year
-setDT(data_clean)
-qty_dyad_year <- data_clean[, .(
+setDT(data_disaster)
+qty_dyad_year <- data_disaster[, .(
   commitment = sum(usd_commitment_defl, na.rm = TRUE),
   disbursement = sum(usd_disbursement_defl, na.rm = TRUE)),
                      by = .(donor_name, recipient_name, year)]
@@ -114,9 +114,14 @@ head(estimand)
 estimand |> 
   slice_sample(prop = .3) |> 
   vis_miss()
+```
 
+replace NAs by 0
+
+```{r}
 estimand[is.na(estimand)] <- 0 # replace NAs by 0
 ```
+
 
 ### Quantity
 
@@ -149,6 +154,94 @@ sorted_estimand[, c("diff_abs", "diff_prop") := {
 --\> For now, we use *levels*.
 
 Note: [@yotovAdvancedGuideTrade2016], p.23: adjustment to treatment, data pooled over consecutive years vs. 3/5-year intervals.
+
+# Mediator
+
+## Channel typologies
+
+Add channel of delivery variables
+
+```{r}
+
+# convert char to factor
+data_mediator <- data_disaster[, channel_bypass := as_factor(channel_bypass)]
+
+# two-way frequency table
+# table(data_mediator$channel_bypass, data_mediator$channel_bypass_ngo)
+
+# create new channel-related vars: share of commitments going through nonstate, (nonstate) ngo, and other nonstate actors
+df <- data_mediator[, .(
+  sh_nonstate = sum(usd_commitment_defl[channel_bypass_ngo != "No"], na.rm = T) / sum(usd_commitment_defl, na.rm = T),
+  sh_nonstate_ngo = sum(usd_commitment_defl[channel_bypass_ngo == "Yes (NGO)"], na.rm = T) / sum(usd_commitment_defl, na.rm = T),
+  sh_nonstate_other = sum(usd_commitment_defl[channel_bypass_ngo == "Yes (Other)"], na.rm = T) / sum(usd_commitment_defl, na.rm = T)
+  ),
+  by = .(donor_code, donor_name, recipient_code, recipient_name, year)]
+```
+
+Some stat desc and viz
+
+```{r}
+
+# summary
+summary(df[, 6:8])
+
+# missing data
+vis_miss(df)
+df |> 
+  filter(is.na(channel_nonstate))
+
+# distribution
+df |> 
+  pivot_longer(-c(donor_code, donor_name, recipient_code, recipient_name, year),
+               names_to = "channel", values_to = "share") |> 
+  ggplot(aes(x = share)) +
+  geom_histogram() +
+  facet_wrap(~ channel) +
+  theme_minimal()
+
+df |> 
+  pivot_longer(-c(donor_code, donor_name, recipient_code, recipient_name, year),
+               names_to = "channel", values_to = "share") |> 
+  ggplot(aes(x = share, color = channel)) +
+  geom_density() +
+  theme_minimal()
+```
+
+Vars are very poralized between 0 and 1. So more relevant to create binary variables.
+
+## Variables
+
+Which threshold to choose?
+
+- 50% 
+- **Mean** (median), cf. [@bernardIntermediariesInternationalTrade2015]: use a dummy that takes value 1 if the intermediary share to observation cp ... is above the median (mean) value of intermediary share across observations.
+
+```{r}
+
+data_mediator <- df[, `:=` (
+  channel_nonstate = ifelse(sh_nonstate > mean(sh_nonstate,na.rm = T), 1, 0),
+  channel_nonstate_ngo = ifelse(sh_nonstate_ngo > mean(sh_nonstate_ngo,na.rm = T), 1, 0),
+  channel_nonstate_other = ifelse(sh_nonstate_other > mean(sh_nonstate_other,na.rm = T), 1, 0)
+)
+][, c("sh_nonstate", "sh_nonstate_ngo", "sh_nonstate_other"):=NULL]
+
+rm(df)
+
+# table(data_mediator$channel_nonstate_ngo, data_mediator$channel_nonstate_other)
+```
+
+Note: Means are not weighted by aggr commit by recipients => high mean of nonstate.
+
+Merge with estimand data set
+
+```{r}
+
+estimand_mediator <- merge(estimand, data_mediator,
+      by = c("donor_name", "recipient_name","year"),
+      all.x = TRUE)
+
+estimand_mediator[is.na(estimand_mediator)] <- 0
+```
 
 # Treatment
 
@@ -239,6 +332,8 @@ vis_miss(event_clim_sample)
 
 We get a sample of 7048 climate-related disasters recorded between 2000 and 2022.
 
+However, almost 2/3 of observations have missing values for the `magnitude` variable.
+
 > Note: other characteristics quoted in the IPCC that could be relevant for the analysis: - magnitude or intensity; - duration; - frequency; - timing; - spatial extent.
 
 # Assignment mechanism
@@ -281,7 +376,7 @@ treatment <- event_clim_sample[year >= 2002
 
 Now, we merge the estimand and treatment data sets by recipient country-year pairs.
 
-We only keep countries which have received disbursements reported to the oECD. In other words, we don't include: (high-income) countries considered as bilateral donors in the CRS data set, their overseas collectivities (ex: la Réunion), and China.
+We only keep countries which have received s reported to the oECD. In other words, we don't include: (high-income) countries considered as bilateral donors in the CRS data set, their overseas collectivities (ex: la Réunion), and China.
 
 Note: we could include in the analysis (i) treatments of the providers; (ii) AidData's Chinese development finance data.
 
@@ -289,7 +384,8 @@ First, we need to check that country names are similar between both data sets.
 
 ```{r}
 
-full_join(distinct(data_clean, recipient_name), 
+# missing matching countries between both data sets
+full_join(distinct(data_disaster, recipient_name), 
           distinct(em_dat, country), 
           by = c("recipient_name" = "country"), 
           keep = T) |> 
@@ -298,7 +394,8 @@ full_join(distinct(data_clean, recipient_name),
 # missing in em_dat / treatment data set: Nauru, Wallis and Futuna, Kosovo, Côte d'Ivoire, Tanzania, West Bank and Gaza Strip, China (People's Republic of), Bolivia, Venezuela, Iran, Micronesia, Mayotte
 
 # first, we merge the iso variable from the treatment data set to the estimand data set.
-estimand <- left_join(estimand, distinct(em_dat, country, iso), by = c("recipient_name" = "country")) |> 
+estimand_mediator <- left_join(estimand_mediator, distinct(em_dat, country, iso), 
+                               by = c("recipient_name" = "country")) |> 
   mutate(iso = case_when( # we add the missing ISO
   recipient_name == "Côte d'Ivoire" ~ 'CIV',
   recipient_name == "Moldova" ~ 'MDA',
@@ -322,7 +419,7 @@ estimand <- left_join(estimand, distinct(em_dat, country, iso), by = c("recipien
   relocate(iso, .after = recipient_name)
 
 # second, we merge the estimand and treatment data sets
-assignment <- merge(estimand, treatment[, !'country'], by = c("iso", "year"), all.x = T)
+assignment <- merge(estimand_mediator, treatment[, !'country'], by = c("iso", "year"), all.x = T)
 setDT(assignment)
 assignment[order(recipient_name, year)]
 ```
@@ -341,9 +438,7 @@ assignment |>
 
 assignment[is.na(assignment)] <- 0 # replace NAs by 0
 
-assignment |> 
-  slice_sample(prop = .3) |> 
-  vis_miss()
+# assignment |> slice_sample(prop = .2) |> vis_miss() # check
 ```
 
 We add new binary treatment variables (1 if any event during the year t in country j, 0 otherwise).
@@ -372,57 +467,65 @@ assignment[, c("cohort_event", "cohort_call", "cohort_appeal", "cohort_declarati
   ifelse(sum(appeal_n, na.rm = T) == 0, NA_integer_, min(year[appeal_cum != 0])),
   ifelse(sum(declaration_n, na.rm = T) == 0, NA_integer_, min(year[declaration_cum != 0]))
 ), by = .(recipient_name, iso)]
+
+# convert to factors
+assignment <- mutate(assignment, across(ends_with('binary'), as_factor))
 ```
 
-We create an unique group identifier for each combination of "donor_name" and "recipient_name".
+We create an unique group identifier for each combination of "donor_name", "recipient_name", and "year".
 
 ```{r}
 
-assignment[, key := .GRP, by = .(donor_name, recipient_name)]
+assignment[, key := .GRP, by = .(donor_name, recipient_name, year)]
+assignment <- assignment |> relocate(key, .before = iso)
 ```
 
 ```{r}
 
 # checks
-distinct(data_clean, donor_name)
+distinct(data_disaster, donor_name)
 distinct(assignment, donor_name)
 
-distinct(data_clean, recipient_name)
+distinct(data_disaster, recipient_name)
 distinct(assignment, recipient_name)
 ```
 
-## Mediator
-
-Add channel of delivery variables
-
-```{r}
-
-
-```
-
-
 ## Plot
 
-Convert binary outcomes variables to factors
+### Univariate distributions
 
 ```{r}
 
-assignment <- mutate(assignment, across(ends_with('binary'), as_factor))
+# outcome
+assignment |> 
+  select(commitment, disbursement, commit_xmarg, disb_xmarg) |> 
+  summary()
+
+# mediator
+assignment |> 
+  select(starts_with("channel")) |> 
+  summary()
+
+# treatment
+assignment |> 
+  select(event_n:declaration_binary) |> 
+  summary()
 ```
+### Bivariate distributions
 
 Boxplot: climate-related binary switching disasters
 
 ```{r}
 
 summarize(assignment,
-  disb = sum(disbursement, na.rm = T),
+  disb = sum(commitment, na.rm = T),
   .by = c(recipient_name, year, event_binary)) |> 
   ggplot(aes(x = event_binary, y = log(disb), colour = event_binary)) +
   geom_boxplot() +
   theme_minimal() +
   theme(legend.position = "none") +
-  labs(x="Treatment", y="Disbursement (log)", 
-       title = "Yearly disbursements to recipient countries",
+  labs(x="Treatment", y=" Commitment, MUSD (log)", 
+       title = "Yearly commitments to recipient countries",
        subtitle = "Treatment: at least one climate-related disaster recorded during the year")
 ```
 
