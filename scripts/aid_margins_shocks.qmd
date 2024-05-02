@@ -17,72 +17,145 @@ load(here('data', 'em_dat_events.RData'))
 
 ## Target population
 
-We remove the 'regional' recipients.
+First, we remove the 'regional' recipients.
 
 ```{r}
 
 data_disaster <- data_delivery[!grepl('regional', recipient_name)]
 ```
 
-We list all potential provider-recipient dyads included in the OECD CRS datasets. Two options:
+Second, we define our universe.
 
--   Unique, whole-period, list of dyads: same number of potential dyads each year.
+- We only consider donors and (non-regional) recipients included in the CRS data set;
 
--   Year-specific lists of dyads: different number of potential dyads each year.
+Note: merge AidData's Chinese ODA data set?
 
-Note: most of the variation comes from nonbilateral providers. Split sample between bilaterals/others?
+- We cover the period from 2002 to 2022.
+
+Note: the start year would probably evolve, depending on missing data for channels of delivery.
+
+This gives us a first set of units of observation. 
+
+## Unbalanced panel data
+
+However, the number of donors and recipients has changed over time, so the sample is **unbalanced**.
+
+## Selection bias due to zeroes
+
+Question: how should we treat missing values (NA/0) ? 
+
+- =0 when at least one commitment | disbursement is observed over the period, NA otherwise;
+
+- =0 when at least one commitment | disbursement is observed in the current year, NA otherwise;
+
+- =0 when **at least one commitment | disbursement has been observed in the current | previous years**, NA otherwise.
+
+Process:
+
+- Create the full sample, `target_pop_period`, which include all possible combinations of years, donors, and recipients in the CRS data set *for the whole period*;
 
 ```{r}
-
 # Unique, whole-period list
-target_pop_period <- data_disaster[, CJ(year, donor_name, recipient_name, unique = TRUE)]
-
-# Year-specific lists
-target_pop_years <- data_disaster[, CJ(donor_name, recipient_name, unique = TRUE), by = year]
+target_pop_period <- data_disaster |> 
+  expand(year, nesting(donor_code, donor_name), nesting(recipient_code, recipient_name))
 ```
 
+- Create two data sets, `cohort_donor_year` and `cohort_recipient_year`, with the list of donors/recipients and their respective year of cohort (i.e. the minimum for which we have an observation in our full sample);
+
 ```{r}
-# Unique, whole-period list
+# donors
+cohort_donor_year <- distinct(data_disaster, donor_code, donor_name, year) |> 
+  mutate(cohort_donor = min(year, na.rm = T), .by = donor_code) |>  
+  distinct(donor_code, donor_name, cohort_donor) |> 
+  arrange(donor_name)
+# recipients
+cohort_recipient_year <- distinct(data_disaster, recipient_code, recipient_name, year) |> 
+  mutate(cohort_recipient = min(year, na.rm = T), .by = recipient_code) |>  
+  distinct(recipient_code, recipient_name, cohort_recipient) |> 
+  arrange(recipient_name)
+```
+
+Note: five countries are both donors and recipients
+
+```{r}
+full_join(cohort_donor_year, cohort_recipient_year, by = c("donor_code" = "recipient_code")) |>
+  filter(!is.na(cohort_recipient) & !is.na(cohort_donor)) |> 
+  select(donor_name)
+```
+
+- Merge both data sets to the full sample `target_pop_period`;
+
+```{r}
+target_pop_period_cohort_donor <- left_join(target_pop_period, cohort_donor_year, 
+                                            by = c("donor_code", "donor_name"))
+target_pop_period_cohort <- left_join(target_pop_period_cohort_donor, cohort_recipient_year, 
+                                      by = c("recipient_code", "recipient_name"))
+```
+
+- Create a dummy variable that takes the value 1 when at least one observation has been observed for both donor and recipient during or before the current year.
+
+The idea is to use this dummy to treat missing values. A missing value is considered as '0' when `dummy_universe` equals '1' and as 'NA' when it equals '0'.
+
+```{r}
+target_pop_period <- target_pop_period_cohort |> 
+  mutate(dummy_universe = ifelse(year >= cohort_donor & year >= cohort_recipient, 1, 0))
+
 target_pop_period |> 
-  count(year) |> 
-  head()
-
-data[bi_multi %in% c(1,3,7,8), # filter for bilateral providers only
-           CJ(year, donor_name, recipient_name, unique = TRUE)] |> 
-  count(year) |> 
+  sample_n(5) |> 
   head()
 ```
+
+- Create a unique identifier with the following format: XXXX_XXXX_XXXX (`donor_code`_`recipient_code`_`year`)
+
+```{r}
+
+target_pop <- target_pop_period |> 
+  mutate(
+    donor_code = sprintf("%04d", donor_code),
+    recipient_code = sprintf("%04d", recipient_code),
+    id = paste(donor_code, recipient_code, sep = "_"),
+    id_year = paste(donor_code, recipient_code, year, sep = "_")) |> 
+  relocate(starts_with("id"), .before = year)
+
+head(target_pop)
+```
+
+- Visualize the unbalanced panel data.
+
+```{r}
+data <- target_pop |> 
+  select(id, year, dummy_universe)
+
+panelView::panelview(1 ~ dummy_universe,
+                     data = data, 
+                     index = c("id","year"), 
+                     type = "treat", 
+                     xlab = "Year", ylab = "Dyad",
+                     legend.labs = c("NA", "R"),
+                     main = "Unbalanced panel data",
+                     gridOff = T, display.all = F,
+                     by.timing = T
+                     )
+```
+Note: most of the variation comes from nonbilateral providers. Filter the full sample to bilateral providers only? However, multilaterals are important actors following disasters.
 
 ```{r}
 
 # Year-specific lists
-merge(target_pop_years |> count(year),
-      data_disaster[bi_multi %in% c(1,3,7,8),  # filter for bilateral providers only
-           CJ(donor_name, recipient_name, unique = TRUE), by = year] |> 
-  count(year),
-      by = 'year') |> 
-  rename(All = n.x, Bilaterals = n.y) |> 
-  pivot_longer(-year, names_to = "Providers", values_to = "value") |> 
-  ggplot(aes(x=year, y=value, color=Providers)) + 
+data_disaster |> 
+  summarize(Donors = n_distinct(donor_name), 
+            Recipients = n_distinct(recipient_name),
+            .by = year) |> 
+  pivot_longer(c("Donors", "Recipients"), names_to = "Actors", values_to = "Number") |> 
+  ggplot(aes(x = year, y = Number, color = Actors)) +
   geom_line() +
-  theme_minimal() +
-  labs(x='', y='# dyads', title = 'Trend in the number of potential dyads each year')
+  theme_minimal()
 ```
-
---\> For now, we use the **year-specific dyads list**.
-
-P.S.
-
--   Remove 'regional' recipients (ex: Africa, regional)?
--   Include data on Chinese ODA from Aid Data?
-
 ## Unit-specific quantity
 
 ### Unit-specific
 
-For now, we focus on **provider-recipient dyads per year**.
-
-Note: later, we could disaggregate to provider-agency and recipient-sector levels.
+Note: for now we focus on **yearly provider-recipient dyads**. However, later we could disaggregate to provider-agency and recipient-sector levels.
 
 ```{r}
 
