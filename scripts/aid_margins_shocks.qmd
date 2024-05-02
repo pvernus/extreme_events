@@ -17,16 +17,23 @@ load(here('data', 'em_dat_events.RData'))
 
 ## Target population
 
-First, we remove the 'regional' recipients.
+First, we create unique identifiers for donors, recipients, donor-recipient dyads, and  donor-recipient-year tryads. The latter has the following format: XXXX_XXXX_XXXX (`donor_code`_`recipient_code`_`year`).
 
 ```{r}
-
-data_disaster <- data_delivery[!grepl('regional', recipient_name)]
+data_disaster <- data_delivery |> 
+  mutate(
+    donor_code = sprintf("%04d", donor_code),
+    recipient_code = sprintf("%04d", recipient_code)
+  )
 ```
 
 Second, we define our universe.
 
 - We only consider donors and (non-regional) recipients included in the CRS data set;
+
+```{r}
+data_disaster[!grepl('regional', recipient_name)]
+```
 
 Note: merge AidData's Chinese ODA data set?
 
@@ -97,25 +104,21 @@ target_pop_period_cohort <- left_join(target_pop_period_cohort_donor, cohort_rec
 The idea is to use this dummy to treat missing values. A missing value is considered as '0' when `dummy_universe` equals '1' and as 'NA' when it equals '0'.
 
 ```{r}
-target_pop_period <- target_pop_period_cohort |> 
+target_pop <- target_pop_period_cohort |> 
   mutate(dummy_universe = ifelse(year >= cohort_donor & year >= cohort_recipient, 1, 0))
 
-target_pop_period |> 
+target_pop |> 
   sample_n(5) |> 
   head()
 ```
-
-- Create a unique identifier with the following format: XXXX_XXXX_XXXX (`donor_code`_`recipient_code`_`year`)
-
 ```{r}
-
-target_pop <- target_pop_period |> 
-  mutate(
-    donor_code = sprintf("%04d", donor_code),
-    recipient_code = sprintf("%04d", recipient_code),
+target_pop <- target_pop |> mutate(
     id = paste(donor_code, recipient_code, sep = "_"),
-    id_year = paste(donor_code, recipient_code, year, sep = "_")) |> 
+    id_year = paste(donor_code, recipient_code, year, sep = "_")
+    ) |> 
   relocate(starts_with("id"), .before = year)
+# convert to DT and set keys
+setDT(target_pop, key = c("id", "id_year"))
 
 head(target_pop)
 ```
@@ -140,7 +143,6 @@ panelView::panelview(1 ~ dummy_universe,
 Note: most of the variation comes from nonbilateral providers. Filter the full sample to bilateral providers only? However, multilaterals are important actors following disasters.
 
 ```{r}
-
 # Year-specific lists
 data_disaster |> 
   summarize(Donors = n_distinct(donor_name), 
@@ -151,6 +153,11 @@ data_disaster |>
   geom_line() +
   theme_minimal()
 ```
+```{r}
+# remove unncessary objects
+rm(data, data_clean, data_delivery, target_pop_period_cohort_donor, target_pop_period_cohort, target_pop_period)
+```
+
 ## Unit-specific quantity
 
 ### Unit-specific
@@ -164,38 +171,65 @@ setDT(data_disaster)
 qty_dyad_year <- data_disaster[, .(
   commitment = sum(usd_commitment_defl, na.rm = TRUE),
   disbursement = sum(usd_disbursement_defl, na.rm = TRUE)),
-                     by = .(donor_name, recipient_name, year)]
+  by = .(donor_code, donor_name, recipient_code, recipient_name, year)
+  ]
+
+head(qty_dyad_year)
 ```
 
-We create a data set that includes all potential year-specific dyads to account for selection bias.
+- Create unique identifiers donor-recipient dyads (`id`) and donor-recipient-year tryads (`id_year`).
+
+```{r}
+qty_dyad_year[, `:=` (
+    id = paste(donor_code, recipient_code, sep = "_"),
+    id_year = paste(donor_code, recipient_code, year, sep = "_")
+)
+]
+
+qty_dyad_year <- qty_dyad_year |> 
+  relocate(starts_with("id"), .before = donor_code)
+
+setDT(qty_dyad_year, key = c("id", "id_year"))
+```
+
+- Merge with `qty_dyad_year` (aid flows) with `target_pop` (full sample).
 
 ```{r}
 
 # merge sum of disb to year-specific list of potential dyads
-head(target_pop_years)
-head(qty_dyad_year)
+head(target_pop) # full sample
+head(qty_dyad_year) # aid flows
 
-estimand <- merge(target_pop_years, qty_dyad_year, 
-      by = c("donor_name", "recipient_name","year"), 
+estimand <- merge(target_pop, 
+                  qty_dyad_year |> select(id_year, commitment, disbursement), 
+      by = "id_year", 
       all.x = TRUE) # rows from x which have no matching row in y are included
 
 head(estimand)
 ```
 
+- Visualize missing data.
+
 ```{r}
 # look at share of missing values
 estimand |> 
-  slice_sample(prop = .3) |> 
+  slice_sample(prop = .1) |> 
   vis_miss()
 ```
+Note: as explained above, some missing data is due to non-existing actors at year t, while other missing data is due to existing actors but with no aid flow at year t. The former should be considered as NAs and the latter as zeroes.
 
-replace NAs by 0
+Consequently, we replace NAs by 0 conditioning on `dummy_universe` == 1.
 
 ```{r}
-estimand[is.na(estimand)] <- 0 # replace NAs by 0
+estimand <- estimand |> 
+  mutate(across(c("commitment", "disbursement"), ~ ifelse(is.na(.x) & dummy_universe == 1, 0, .x)))
 ```
 
-
+```{r}
+estimand |> 
+  slice_sample(prop = .1) |> 
+  vis_miss()
+```
 ### Quantity
 
 We include a binary (extensive margin) and a continuous outcomes (intensive margin; to estimate ratio or semi-elasticity, for instance).
