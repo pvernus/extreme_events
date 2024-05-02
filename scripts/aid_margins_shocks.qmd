@@ -43,11 +43,11 @@ Note: the start year would probably evolve, depending on missing data for channe
 
 This gives us a first set of units of observation. 
 
-## Unbalanced panel data
+### Unbalanced panel data
 
 However, the number of donors and recipients has changed over time, so the sample is **unbalanced**.
 
-## Selection bias due to zeroes
+### Selection bias due to zeroes
 
 Question: how should we treat missing values (NA/0) ? 
 
@@ -232,81 +232,79 @@ estimand |>
 ```
 ### Quantity
 
-We include a binary (extensive margin) and a continuous outcomes (intensive margin; to estimate ratio or semi-elasticity, for instance).
+We include a binary (extensive margin) and a continuous outcomes (intensive margin).
 
 ```{r}
-
-estimand <- estimand[, c('commit_xmarg', 'disb_xmarg') := {
-  commit_xmarg <- ifelse(commitment != 0, 1, 0)
-  disb_xmarg <- ifelse(disbursement != 0, 1, 0)
-  list(commit_xmarg, disb_xmarg)
-}]
+estimand <- estimand[, `:=` (
+  commit_xmarg = ifelse(commitment != 0 & !is.na(commitment), 1, 0),
+  disb_xmarg = ifelse(disbursement != 0 & !is.na(disbursement), 1, 0)  
+)]
 
 head(estimand)
 ```
 
-> Two ways to measure annual change: - Absolute change (first-difference). - Proportional change (coefficient of variation), cf. proportional treatment effect (semi-elasticity).
+Note: alternative for the definition of the unit of observation, see [@yotovAdvancedGuideTrade2016], p.23: adjustment to treatment, data pooled over consecutive years vs. 3/5-year intervals.
 
-```{r}
-
-sorted_estimand <- estimand[order(donor_name, recipient_name, year)]
-sorted_estimand[, c("diff_abs", "diff_prop") := {
-  diff_abs <- commitment - shift(commitment)
-  diff_prop <- (commitment - shift(commitment)) / shift(commitment)
-  list(diff_abs, diff_prop)
-},
-  by = .(donor_name, recipient_name)]
-```
-
---\> For now, we use *levels*.
-
-Note: [@yotovAdvancedGuideTrade2016], p.23: adjustment to treatment, data pooled over consecutive years vs. 3/5-year intervals.
-
-# Mediator
+# Mediator (channel of delivery)
 
 ## Channel typologies
 
-Add channel of delivery variables
+- Create variables for the channels of delivery:
 
 ```{r}
-
-# convert char to factor
-data_mediator <- data_disaster[, channel_bypass := as_factor(channel_bypass)]
-
 # two-way frequency table
-# table(data_mediator$channel_bypass, data_mediator$channel_bypass_ngo)
+table(data_disaster$channel_bypass, data_disaster$channel_bypass_ngo)
+```
 
+* % non State vs. State channels;
+* % non State & NGO vs. Other channels;
+* % non State & other (non-NGO) vs. Other channels.
+
+```{r}
 # create new channel-related vars: share of commitments going through nonstate, (nonstate) ngo, and other nonstate actors
-df <- data_mediator[, .(
+mediator_dyad_year <- data_disaster[, .(
   sh_nonstate = sum(usd_commitment_defl[channel_bypass_ngo != "No"], na.rm = T) / sum(usd_commitment_defl, na.rm = T),
   sh_nonstate_ngo = sum(usd_commitment_defl[channel_bypass_ngo == "Yes (NGO)"], na.rm = T) / sum(usd_commitment_defl, na.rm = T),
   sh_nonstate_other = sum(usd_commitment_defl[channel_bypass_ngo == "Yes (Other)"], na.rm = T) / sum(usd_commitment_defl, na.rm = T)
   ),
   by = .(donor_code, donor_name, recipient_code, recipient_name, year)]
+
+sample_n(mediator_dyad_year, 5)
 ```
 
-Some stat desc and viz
+Note (1): how to deal with negative flows (leading to values < 0 and > 1?
 
 ```{r}
+summary(mediator_dyad_year[, 6:8])
+```
 
-# summary
-summary(df[, 6:8])
+Note (2): missing data are due to observations with commitments valued as '0'.
 
+- Replace NAs by zeroes in delivery channel variables.
+
+```{r}
 # missing data
-vis_miss(df)
-df |> 
-  filter(is.na(channel_nonstate))
+vis_miss(mediator_dyad_year)
 
-# distribution
-df |> 
-  pivot_longer(-c(donor_code, donor_name, recipient_code, recipient_name, year),
-               names_to = "channel", values_to = "share") |> 
-  ggplot(aes(x = share)) +
-  geom_histogram() +
-  facet_wrap(~ channel) +
-  theme_minimal()
+# observations with missing 
+mediator_dyad_year |> 
+  filter(is.na(sh_nonstate))
 
-df |> 
+# missing data are due to observations with commitments valued as '0'
+data_disaster |> 
+  filter((donor_code == "0005" & recipient_code == "0228") & year == 2006)
+
+# replace NaN to zeroes
+mediator_dyad_year <- mediator_dyad_year |> 
+  mutate(across(starts_with("sh_"), \(x) replace_na(x, 0)))
+```
+
+## Variables
+
+Channel delivery variables follow a **bipolarized distribution**, with max at 0 and 1. Thus, it might be more relevant to use binary variables.
+
+```{r}
+mediator_dyad_year |> 
   pivot_longer(-c(donor_code, donor_name, recipient_code, recipient_name, year),
                names_to = "channel", values_to = "share") |> 
   ggplot(aes(x = share, color = channel)) +
@@ -314,40 +312,54 @@ df |>
   theme_minimal()
 ```
 
-Vars are very poralized between 0 and 1. So more relevant to create binary variables.
-
-## Variables
-
-Which threshold to choose?
+However, Which *threshold* to choose?
 
 - 50% 
-- **Mean** (median), cf. [@bernardIntermediariesInternationalTrade2015]: use a dummy that takes value 1 if the intermediary share to observation cp ... is above the median (mean) value of intermediary share across observations.
+- **Mean** (median), cf. [@bernardIntermediariesInternationalTrade2015]: use a dummy that takes value 1 if the intermediary share of an observation ... is above the median (mean) value of intermediary share across observations.
 
 ```{r}
 
-data_mediator <- df[, `:=` (
+mediator <- mediator_dyad_year[, `:=` (
   channel_nonstate = ifelse(sh_nonstate > mean(sh_nonstate,na.rm = T), 1, 0),
   channel_nonstate_ngo = ifelse(sh_nonstate_ngo > mean(sh_nonstate_ngo,na.rm = T), 1, 0),
   channel_nonstate_other = ifelse(sh_nonstate_other > mean(sh_nonstate_other,na.rm = T), 1, 0)
 )
 ][, c("sh_nonstate", "sh_nonstate_ngo", "sh_nonstate_other"):=NULL]
 
-rm(df)
+rm(data)
 
-# table(data_mediator$channel_nonstate_ngo, data_mediator$channel_nonstate_other)
+sample_n(mediator, 5)
+
+summary(mediator[,6:8])
 ```
 
-Note: Means are not weighted by aggr commit by recipients => high mean of nonstate.
+Note: we use *non-weighted means* which might lead to under-estimate the use of nonstate channels of delivery.
 
-Merge with estimand data set
+- Merge `mediator_dyad_year` (channels of delivery) and `estimand` (aid flows).
 
 ```{r}
+# unique identifiers (key)
+mediator <- mediator |> 
+  mutate(
+    id = paste(donor_code, recipient_code, sep = "_"),
+    id_year = paste(donor_code, recipient_code, year, sep = "_")
+    ) |> 
+  relocate(year, .before = donor_code) |> 
+  relocate(starts_with("id"), .before = year)
 
-estimand_mediator <- merge(estimand, data_mediator,
-      by = c("donor_name", "recipient_name","year"),
-      all.x = TRUE)
+setDT(mediator, key = c("id", "id_year"))
 
-estimand_mediator[is.na(estimand_mediator)] <- 0
+head(mediator)
+
+# merge
+estimand_mediator <- merge(estimand, 
+                           mediator |> select(id_year, starts_with("channel_nonstate")),
+                           all.x = TRUE)
+
+# replace NAs w/ zeroes when aid flows are zeroes (!= NAs)
+estimand_mediator <- estimand_mediator |> 
+  mutate(across(starts_with("channel"), \(x) ifelse(!is.na(commitment), replace_na(0), x)))
+
 ```
 
 # Treatment
