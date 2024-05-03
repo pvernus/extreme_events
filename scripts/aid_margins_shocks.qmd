@@ -32,7 +32,8 @@ Second, we define our universe.
 - We only consider donors and (non-regional) recipients included in the CRS data set;
 
 ```{r}
-data_disaster[!grepl('regional', recipient_name)]
+data_disaster <- data_disaster |> 
+  filter(!grepl('regional', recipient_name))
 ```
 
 Note: merge AidData's Chinese ODA data set?
@@ -236,8 +237,8 @@ We include a binary (extensive margin) and a continuous outcomes (intensive marg
 
 ```{r}
 estimand <- estimand[, `:=` (
-  commit_xmarg = ifelse(commitment != 0 & !is.na(commitment), 1, 0),
-  disb_xmarg = ifelse(disbursement != 0 & !is.na(disbursement), 1, 0)  
+  commit_xmarg = ifelse(commitment == 0 | is.na(commitment), 0, 1),
+  disb_xmarg = ifelse(disbursement == 0 | is.na(disbursement), 0, 1)  
 )]
 
 head(estimand)
@@ -297,6 +298,8 @@ data_disaster |>
 # replace NaN to zeroes
 mediator_dyad_year <- mediator_dyad_year |> 
   mutate(across(starts_with("sh_"), \(x) replace_na(x, 0)))
+
+summary(mediator_dyad_year[, 6:8])
 ```
 
 ## Variables
@@ -319,12 +322,13 @@ However, Which *threshold* to choose?
 
 ```{r}
 
-mediator <- mediator_dyad_year[, `:=` (
+mediator <- mediator_dyad_year |> 
+  mutate(
   channel_nonstate = ifelse(sh_nonstate > mean(sh_nonstate,na.rm = T), 1, 0),
   channel_nonstate_ngo = ifelse(sh_nonstate_ngo > mean(sh_nonstate_ngo,na.rm = T), 1, 0),
   channel_nonstate_other = ifelse(sh_nonstate_other > mean(sh_nonstate_other,na.rm = T), 1, 0)
-)
-][, c("sh_nonstate", "sh_nonstate_ngo", "sh_nonstate_other"):=NULL]
+  ) |> 
+  select(-c("sh_nonstate", "sh_nonstate_ngo", "sh_nonstate_other"))
 
 rm(data)
 
@@ -356,17 +360,23 @@ estimand_mediator <- merge(estimand,
                            mediator |> select(id_year, starts_with("channel_nonstate")),
                            all.x = TRUE)
 
+head(estimand_mediator)
+summary(estimand_mediator)
+
 # replace NAs w/ zeroes when aid flows are zeroes (!= NAs)
 estimand_mediator <- estimand_mediator |> 
-  mutate(across(starts_with("channel"), \(x) ifelse(!is.na(commitment), replace_na(0), x)))
+  mutate(across(starts_with("channel"), \(x) ifelse(is.na(x) & dummy_universe == 1, replace_na(0), x)))
 
+head(estimand_mediator)
 ```
 
 # Treatment
 
 ## Hazard
 
-### Types
+### Climate and Weather Extreme Events
+
+Source: [@ipcc2023]
 
 -   temperature extremes;
 
@@ -382,9 +392,7 @@ estimand_mediator <- estimand_mediator |>
 
 -   compound events (multivariate and concurrent extremes)
 
-Source: [@ipcc2023]
-
-### Data source
+### EM-DAT data
 
 [@delforge2023]
 
@@ -455,15 +463,13 @@ However, almost 2/3 of observations have missing values for the `magnitude` vari
 
 > Note: other characteristics quoted in the IPCC that could be relevant for the analysis: - magnitude or intensity; - duration; - frequency; - timing; - spatial extent.
 
-# Assignment mechanism
-
-## Merge estimand and treatment data sets
+## Assignment mechanism
 
 For now, we only consider: - the number of event(s) per year in each country and - the cumulative number of events in each country since 2000.
 
-We will add a binary variable (switching/on-off treatment) after merging with the estimand data set.
-
 Note: the choice of period covered by the analysis will impact the the cumulative number of events in each country.
+
+- Create variables for the number of yearly disasters in each country.
 
 ```{r}
 
@@ -493,27 +499,47 @@ treatment <- event_clim_sample[year >= 2002
   ]
 ```
 
-Now, we merge the estimand and treatment data sets by recipient country-year pairs.
+Note: We will add a binary variable (switching/on-off treatment) after merging with the `estimand_mediator` data set.
 
-We only keep countries which have received s reported to the oECD. In other words, we don't include: (high-income) countries considered as bilateral donors in the CRS data set, their overseas collectivities (ex: la Réunion), and China.
+- Merge the `estimand_mediator` and `treatment` data sets by recipient country-year pairs.
 
-Note: we could include in the analysis (i) treatments of the providers; (ii) AidData's Chinese development finance data.
-
-First, we need to check that country names are similar between both data sets.
+Note (1): we only keep countries which have received/reported aid flows to the oECD. In other words, we don't include: (high-income) bilateral donors, overseas collectivities (ex: la Réunion), and China. Besides, the West Bank and Gaza Strip are not included in the EM-DAT data set.
 
 ```{r}
-
 # missing matching countries between both data sets
 full_join(distinct(data_disaster, recipient_name), 
           distinct(em_dat, country), 
           by = c("recipient_name" = "country"), 
           keep = T) |> 
-  arrange(country)
+  arrange(country) |> 
+  head()
 
+left_join(distinct(data_disaster, recipient_name), 
+          distinct(em_dat, country), 
+          by = c("recipient_name" = "country"), 
+          keep = T) |> 
+  filter(is.na(country)) |> 
+  arrange(recipient_name) |> 
+  head()
+
+right_join(distinct(data_disaster, recipient_name), 
+          distinct(em_dat, country), 
+          by = c("recipient_name" = "country"), 
+          keep = T) |> 
+  filter(is.na(recipient_name)) |> 
+  arrange(country) |> 
+  head()
+```
+
+Note (2): we could include treatments of the donor countries in the analysis.
+
+First, we need to check that country names are similar between both data sets.
+
+```{r}
 # missing in em_dat / treatment data set: Nauru, Wallis and Futuna, Kosovo, Côte d'Ivoire, Tanzania, West Bank and Gaza Strip, China (People's Republic of), Bolivia, Venezuela, Iran, Micronesia, Mayotte
 
 # first, we merge the iso variable from the treatment data set to the estimand data set.
-estimand_mediator <- left_join(estimand_mediator, distinct(em_dat, country, iso), 
+estimand_mediator_iso <- left_join(estimand_mediator, distinct(em_dat, country, iso), 
                                by = c("recipient_name" = "country")) |> 
   mutate(iso = case_when( # we add the missing ISO
   recipient_name == "Côte d'Ivoire" ~ 'CIV',
@@ -537,66 +563,74 @@ estimand_mediator <- left_join(estimand_mediator, distinct(em_dat, country, iso)
   )) |> 
   relocate(iso, .after = recipient_name)
 
-# second, we merge the estimand and treatment data sets
-assignment <- merge(estimand_mediator, treatment[, !'country'], by = c("iso", "year"), all.x = T)
-setDT(assignment)
-assignment[order(recipient_name, year)]
+# missing data
+ estimand_mediator_iso |> 
+  sample_n(5000) |> 
+  vis_miss()
 ```
 
+- Merge the `estimand_mediator_iso` and `treatment` data sets.
+
 ```{r}
+estimand_mediator_treatment <- merge(estimand_mediator_iso, treatment[, !'country'], 
+                                     by = c("iso", "year"), all.x = T) |> 
+  select(-iso)
 
-head(assignment)
+head(estimand_mediator_treatment)
 
-assignment |> 
-  filter(is.na(event_n))
+# estimand_mediator_treatment |> filter(is.na(commitment) & !is.na(event_n))
 
-assignment |> 
-  slice_sample(prop = .2) |> 
-#  vis_dat()
- vis_miss()
-
-assignment[is.na(assignment)] <- 0 # replace NAs by 0
-
-# assignment |> slice_sample(prop = .2) |> vis_miss() # check
+rm(estimand_mediator_iso)
 ```
 
-We add new binary treatment variables (1 if any event during the year t in country j, 0 otherwise).
+- Replace NAs by zeroes conditional on `dummy_universe`.
 
 ```{r}
+estimand_mediator_treatment <- estimand_mediator_treatment |> 
+  mutate(across(event_n:declaration_cum, \(x) ifelse(is.na(x) & dummy_universe == 1, replace_na(0), x)))
 
-assignment[, c("event_binary", "call_binary", "appeal_binary", "declaration_binary") := 
-             .(
-  ifelse(event_n %in% c(0,NA), 0, 1),
-  ifelse(call_n %in% c(0,NA), 0, 1),
-  ifelse(appeal_n %in% c(0,NA), 0, 1),
-  ifelse(declaration_n %in% c(0,NA), 0, 1)  
-             )
-]
+estimand_mediator_treatment |> sample_n(1000) |> vis_miss()
+```
 
+We add new binary treatment variables (=1 if any event during the year t in country j, 0 otherwise).
+
+```{r}
+estimand_mediator_treatment <- estimand_mediator_treatment |> 
+  mutate(
+    event_binary = ifelse(event_n %in% c(0,NA), 0, 1),
+    call_binary = ifelse(call_n %in% c(0,NA), 0, 1),
+    appeal_binary = ifelse(appeal_n %in% c(0,NA), 0, 1),
+    declaration_binary = ifelse(declaration_n %in% c(0,NA), 0, 1)
+  )
 ```
 
 We also add a new cohort variable which takes the first year of treatment for each country as a value.
 
 ```{r}
 
-# cohort: year where the cumulative number of disasters is the lowest but different from zero.
-assignment[, c("cohort_event", "cohort_call", "cohort_appeal", "cohort_declaration") := .(
-  ifelse(sum(event_n, na.rm = T) == 0, NA_integer_, min(year[event_cum != 0])),
-  ifelse(sum(call_n, na.rm = T) == 0, NA_integer_, min(year[call_cum != 0])),
-  ifelse(sum(appeal_n, na.rm = T) == 0, NA_integer_, min(year[appeal_cum != 0])),
-  ifelse(sum(declaration_n, na.rm = T) == 0, NA_integer_, min(year[declaration_cum != 0]))
-), by = .(recipient_name, iso)]
+# cohort: year where the cumulative number of disasters is the lowest but different from zero
+estimand_mediator_treatment <- estimand_mediator_treatment |> 
+  mutate(
+    cohort_event = if_else(sum(event_cum, na.rm = T) == 0, NA_integer_, min(year[event_cum != 0], na.rm = T)),
+    cohort_call = if_else(sum(call_cum, na.rm = T) == 0, NA_integer_, min(year[call_cum != 0], na.rm = T)),
+    cohort_appeal = if_else(sum(appeal_cum, na.rm = T) == 0, NA_integer_, min(year[appeal_cum != 0], na.rm = T)),
+    cohort_declaration = if_else(sum(declaration_cum, na.rm = T) == 0, NA_integer_, min(year[declaration_cum != 0], na.rm = T)),
+    .by = recipient_code   
+  )
 
 # convert to factors
-assignment <- mutate(assignment, across(ends_with('binary'), as_factor))
+assignment <- mutate(estimand_mediator_treatment, across(ends_with('binary'), as_factor))
 ```
 
-We create an unique group identifier for each combination of "donor_name", "recipient_name", and "year".
+We create an unique group identifier for each combination of donor-recipient-year tryads.
 
 ```{r}
-
-assignment[, key := .GRP, by = .(donor_name, recipient_name, year)]
-assignment <- assignment |> relocate(key, .before = iso)
+assignment <- assignment |> 
+  mutate(
+    id = paste(donor_code, recipient_code, sep = "_"),
+    id_year = paste(donor_code, recipient_code, year, sep = "_")
+    ) |> 
+  relocate(starts_with("id"), .before = year)
 ```
 
 ```{r}
@@ -635,11 +669,10 @@ assignment |>
 Boxplot: climate-related binary switching disasters
 
 ```{r}
-
 summarize(assignment,
-  disb = sum(commitment, na.rm = T),
+  commit = sum(commitment, na.rm = T),
   .by = c(recipient_name, year, event_binary)) |> 
-  ggplot(aes(x = event_binary, y = log(disb), colour = event_binary)) +
+  ggplot(aes(x = event_binary, y = log(commit), colour = event_binary)) +
   geom_boxplot() +
   theme_minimal() +
   theme(legend.position = "none") +
@@ -711,3 +744,14 @@ Related articles
 [@reinhardt2024]
 
 [@dellmuth2021]
+
+```{r}
+
+df <- as.data.frame(assignment) 
+panelView::panelview(commitment ~ 1, 
+                     data = df, 
+                     index = c("id","year"), 
+                     xlab = "Year", ylab = "Dyads",
+                     type = "missing")
+```
+
