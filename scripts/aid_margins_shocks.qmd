@@ -17,7 +17,7 @@ load(here('data', 'em_dat_events.RData'))
 
 ## Target population
 
-First, we create unique identifiers for donors, recipients, donor-recipient dyads, and  donor-recipient-year tryads. The latter has the following format: XXXX_XXXX_XXXX (`donor_code`_`recipient_code`_`year`).
+First, we create unique identifiers for donors, recipients, donor-recipient dyads, and donor-recipient-year tryads. The latter has the following format: XXXX_XXXX_XXXX (`donor_coderecipient_codeyear`).
 
 ```{r}
 data_disaster <- data_delivery |> 
@@ -29,7 +29,7 @@ data_disaster <- data_delivery |>
 
 Second, we define our universe.
 
-- We only consider donors and (non-regional) recipients included in the CRS data set;
+-   We only consider donors and (non-regional) recipients included in the CRS data set;
 
 ```{r}
 data_disaster <- data_disaster |> 
@@ -38,11 +38,11 @@ data_disaster <- data_disaster |>
 
 Note: merge AidData's Chinese ODA data set?
 
-- We cover the period from 2002 to 2022.
+-   We cover the period from 2002 to 2022.
 
 Note: the start year would probably evolve, depending on missing data for channels of delivery.
 
-This gives us a first set of units of observation. 
+This gives us a first set of units of observation.
 
 ### Unbalanced panel data
 
@@ -50,17 +50,17 @@ However, the number of donors and recipients has changed over time, so the sampl
 
 ### Selection bias due to zeroes
 
-Question: how should we treat missing values (NA/0) ? 
+Question: how should we treat missing values (NA/0) ?
 
-- =0 when at least one commitment | disbursement is observed over the period, NA otherwise;
+-   =0 when at least one commitment \| disbursement is observed over the period, NA otherwise;
 
-- =0 when at least one commitment | disbursement is observed in the current year, NA otherwise;
+-   =0 when at least one commitment \| disbursement is observed in the current year, NA otherwise;
 
-- =0 when **at least one commitment | disbursement has been observed in the current | previous years**, NA otherwise.
+-   =0 when **at least one commitment \| disbursement has been observed in the current \| previous years**, NA otherwise.
 
 Process:
 
-- Create the full sample, `target_pop_period`, which include all possible combinations of years, donors, and recipients in the CRS data set *for the whole period*;
+-   Create the full sample, `target_pop_period`, which include all possible combinations of years, donors, and recipients in the CRS data set *for the whole period*;
 
 ```{r}
 # Unique, whole-period list
@@ -68,7 +68,7 @@ target_pop_period <- data_disaster |>
   expand(year, nesting(donor_code, donor_name), nesting(recipient_code, recipient_name))
 ```
 
-- Create two data sets, `cohort_donor_year` and `cohort_recipient_year`, with the list of donors/recipients and their respective year of cohort (i.e. the minimum for which we have an observation in our full sample);
+-   Create two data sets, `cohort_donor_year` and `cohort_recipient_year`, with the list of donors/recipients and their respective year of cohort (i.e. the minimum for which we have an observation in our full sample);
 
 ```{r}
 # donors
@@ -91,7 +91,7 @@ full_join(cohort_donor_year, cohort_recipient_year, by = c("donor_code" = "recip
   select(donor_name)
 ```
 
-- Merge both data sets to the full sample `target_pop_period`;
+-   Merge both data sets to the full sample `target_pop_period`;
 
 ```{r}
 target_pop_period_cohort_donor <- left_join(target_pop_period, cohort_donor_year, 
@@ -100,7 +100,7 @@ target_pop_period_cohort <- left_join(target_pop_period_cohort_donor, cohort_rec
                                       by = c("recipient_code", "recipient_name"))
 ```
 
-- Create a dummy variable that takes the value 1 when at least one observation has been observed for both donor and recipient during or before the current year.
+-   Create a dummy variable that takes the value 1 when at least one observation has been observed for both donor and recipient during or before the current year.
 
 The idea is to use this dummy to treat missing values. A missing value is considered as '0' when `dummy_universe` equals '1' and as 'NA' when it equals '0'.
 
@@ -112,6 +112,7 @@ target_pop |>
   sample_n(5) |> 
   head()
 ```
+
 ```{r}
 target_pop <- target_pop |> mutate(
     id = paste(donor_code, recipient_code, sep = "_"),
@@ -124,7 +125,7 @@ setDT(target_pop, key = c("id", "id_year"))
 head(target_pop)
 ```
 
-- Visualize the unbalanced panel data.
+-   Visualize the unbalanced panel data.
 
 ```{r}
 data <- target_pop |> 
@@ -141,6 +142,7 @@ panelView::panelview(1 ~ dummy_universe,
                      by.timing = T
                      )
 ```
+
 Note: most of the variation comes from nonbilateral providers. Filter the full sample to bilateral providers only? However, multilaterals are important actors following disasters.
 
 ```{r}
@@ -154,6 +156,7 @@ data_disaster |>
   geom_line() +
   theme_minimal()
 ```
+
 ```{r}
 # remove unncessary objects
 rm(data, data_clean, data_delivery, target_pop_period_cohort_donor, target_pop_period_cohort, target_pop_period)
@@ -178,7 +181,7 @@ qty_dyad_year <- data_disaster[, .(
 head(qty_dyad_year)
 ```
 
-- Create unique identifiers donor-recipient dyads (`id`) and donor-recipient-year tryads (`id_year`).
+-   Create unique identifiers donor-recipient dyads (`id`) and donor-recipient-year tryads (`id_year`).
 
 ```{r}
 qty_dyad_year[, `:=` (
@@ -193,7 +196,7 @@ qty_dyad_year <- qty_dyad_year |>
 setDT(qty_dyad_year, key = c("id", "id_year"))
 ```
 
-- Merge with `qty_dyad_year` (aid flows) with `target_pop` (full sample).
+-   Merge with `qty_dyad_year` (aid flows) with `target_pop` (full sample).
 
 ```{r}
 
@@ -209,7 +212,7 @@ estimand <- merge(target_pop,
 head(estimand)
 ```
 
-- Visualize missing data.
+-   Visualize missing data.
 
 ```{r}
 # look at share of missing values
@@ -217,6 +220,7 @@ estimand |>
   slice_sample(prop = .1) |> 
   vis_miss()
 ```
+
 Note: as explained above, some missing data is due to non-existing actors at year t, while other missing data is due to existing actors but with no aid flow at year t. The former should be considered as NAs and the latter as zeroes.
 
 Consequently, we replace NAs by 0 conditioning on `dummy_universe` == 1.
@@ -231,6 +235,7 @@ estimand |>
   slice_sample(prop = .1) |> 
   vis_miss()
 ```
+
 ### Quantity
 
 We include a binary (extensive margin) and a continuous outcomes (intensive margin).
@@ -250,16 +255,16 @@ Note: alternative for the definition of the unit of observation, see [@yotovAdva
 
 ## Channel typologies
 
-- Create variables for the channels of delivery:
+-   Create variables for the channels of delivery:
 
 ```{r}
 # two-way frequency table
 table(data_disaster$channel_bypass, data_disaster$channel_bypass_ngo)
 ```
 
-* % non State vs. State channels;
-* % non State & NGO vs. Other channels;
-* % non State & other (non-NGO) vs. Other channels.
+-   \% non State vs. State channels;
+-   \% non State & NGO vs. Other channels;
+-   \% non State & other (non-NGO) vs. Other channels.
 
 ```{r}
 # create new channel-related vars: share of commitments going through nonstate, (nonstate) ngo, and other nonstate actors
@@ -273,7 +278,7 @@ mediator_dyad_year <- data_disaster[, .(
 sample_n(mediator_dyad_year, 5)
 ```
 
-Note (1): how to deal with negative flows (leading to values < 0 and > 1?
+Note (1): how to deal with negative flows (leading to values \< 0 and \> 1?
 
 ```{r}
 summary(mediator_dyad_year[, 6:8])
@@ -281,7 +286,7 @@ summary(mediator_dyad_year[, 6:8])
 
 Note (2): missing data are due to observations with commitments valued as '0'.
 
-- Replace NAs by zeroes in delivery channel variables.
+-   Replace NAs by zeroes in delivery channel variables.
 
 ```{r}
 # missing data
@@ -317,8 +322,8 @@ mediator_dyad_year |>
 
 However, Which *threshold* to choose?
 
-- 50% 
-- **Mean** (median), cf. [@bernardIntermediariesInternationalTrade2015]: use a dummy that takes value 1 if the intermediary share of an observation ... is above the median (mean) value of intermediary share across observations.
+-   50%
+-   **Mean** (median), cf. [@bernardIntermediariesInternationalTrade2015]: use a dummy that takes value 1 if the intermediary share of an observation ... is above the median (mean) value of intermediary share across observations.
 
 ```{r}
 
@@ -339,7 +344,7 @@ summary(mediator[,6:8])
 
 Note: we use *non-weighted means* which might lead to under-estimate the use of nonstate channels of delivery.
 
-- Merge `mediator_dyad_year` (channels of delivery) and `estimand` (aid flows).
+-   Merge `mediator_dyad_year` (channels of delivery) and `estimand` (aid flows).
 
 ```{r}
 # unique identifiers (key)
@@ -469,7 +474,7 @@ For now, we only consider: - the number of event(s) per year in each country and
 
 Note: the choice of period covered by the analysis will impact the the cumulative number of events in each country.
 
-- Create variables for the number of yearly disasters in each country.
+-   Create variables for the number of yearly disasters in each country.
 
 ```{r}
 
@@ -501,7 +506,7 @@ treatment <- event_clim_sample[year >= 2002
 
 Note: We will add a binary variable (switching/on-off treatment) after merging with the `estimand_mediator` data set.
 
-- Merge the `estimand_mediator` and `treatment` data sets by recipient country-year pairs.
+-   Merge the `estimand_mediator` and `treatment` data sets by recipient country-year pairs.
 
 Note (1): we only keep countries which have received/reported aid flows to the oECD. In other words, we don't include: (high-income) bilateral donors, overseas collectivities (ex: la Réunion), and China. Besides, the West Bank and Gaza Strip are not included in the EM-DAT data set.
 
@@ -569,7 +574,7 @@ estimand_mediator_iso <- left_join(estimand_mediator, distinct(em_dat, country, 
   vis_miss()
 ```
 
-- Merge the `estimand_mediator_iso` and `treatment` data sets.
+-   Merge the `estimand_mediator_iso` and `treatment` data sets.
 
 ```{r}
 estimand_mediator_treatment <- merge(estimand_mediator_iso, treatment[, !'country'], 
@@ -583,7 +588,7 @@ head(estimand_mediator_treatment)
 rm(estimand_mediator_iso)
 ```
 
-- Replace NAs by zeroes conditional on `dummy_universe`.
+-   Replace NAs by zeroes conditional on `dummy_universe`.
 
 ```{r}
 estimand_mediator_treatment <- estimand_mediator_treatment |> 
@@ -597,10 +602,10 @@ We add new binary treatment variables (=1 if any event during the year t in coun
 ```{r}
 estimand_mediator_treatment <- estimand_mediator_treatment |> 
   mutate(
-    event_binary = ifelse(event_n %in% c(0,NA), 0, 1),
-    call_binary = ifelse(call_n %in% c(0,NA), 0, 1),
-    appeal_binary = ifelse(appeal_n %in% c(0,NA), 0, 1),
-    declaration_binary = ifelse(declaration_n %in% c(0,NA), 0, 1)
+    event_dummy = ifelse(event_n %in% c(0,NA), 0, 1),
+    call_dummy = ifelse(call_n %in% c(0,NA), 0, 1),
+    appeal_dummy = ifelse(appeal_n %in% c(0,NA), 0, 1),
+    declaration_dummy = ifelse(declaration_n %in% c(0,NA), 0, 1)
   )
 ```
 
@@ -661,9 +666,10 @@ assignment |>
 
 # treatment
 assignment |> 
-  select(event_n:declaration_binary) |> 
+  select(event_n:declaration_dummy) |> 
   summary()
 ```
+
 ### Bivariate distributions
 
 Boxplot: climate-related binary switching disasters
@@ -671,8 +677,8 @@ Boxplot: climate-related binary switching disasters
 ```{r}
 summarize(assignment,
   commit = sum(commitment, na.rm = T),
-  .by = c(recipient_name, year, event_binary)) |> 
-  ggplot(aes(x = event_binary, y = log(commit), colour = event_binary)) +
+  .by = c(recipient_name, year, event_dummy)) |> 
+  ggplot(aes(x = event_dummy, y = log(commit), colour = event_dummy)) +
   geom_boxplot() +
   theme_minimal() +
   theme(legend.position = "none") +
@@ -688,9 +694,9 @@ Treatment plot
 ## Binary switching treatment
 # pivot to wider
 plot_treat_binary <- distinct(assignment,
-         recipient_name, year, event_binary) |> 
-  mutate(event_binary = as.numeric(levels(event_binary))[event_binary]) |> 
-  pivot_wider(names_from = 'year', values_from = 'event_binary') |> 
+         recipient_name, year, event_dummy) |> 
+  mutate(event_dummy = as.numeric(levels(event_dummy))[event_dummy]) |> 
+  pivot_wider(names_from = 'year', values_from = 'event_dummy') |> 
   rowwise() |> 
   mutate(total = sum(c_across(`2002`:`2022`), na.rm = T)) |> 
   ungroup() |> 
@@ -717,9 +723,9 @@ Binary switching *call* treatment
 ## Binary switching treatment
 # pivot to wider
 plot_call_binary <- distinct(assignment,
-         recipient_name, year, call_binary) |> 
-  mutate(call_binary = as.numeric(levels(call_binary))[call_binary]) |> 
-  pivot_wider(names_from = 'year', values_from = 'call_binary') |> 
+         recipient_name, year, call_dummy) |> 
+  mutate(call_dummy = as.numeric(levels(call_dummy))[call_dummy]) |> 
+  pivot_wider(names_from = 'year', values_from = 'call_dummy') |> 
   rowwise() |> 
   mutate(total = sum(c_across(`2002`:`2022`), na.rm = T)) |> 
   ungroup() |> 
@@ -754,4 +760,3 @@ panelView::panelview(commitment ~ 1,
                      xlab = "Year", ylab = "Dyads",
                      type = "missing")
 ```
-

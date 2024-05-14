@@ -70,6 +70,7 @@ em_dat |>
   theme(axis.text.y = element_blank()) +
   labs(x='Year', y='', fill="Type")
 ```
+
 Note: stable(?) number of events per year.
 
 ```{r}
@@ -87,8 +88,8 @@ summarize(em_dat,
   labs(x='Year', y='# of countries',
        title='Number of countries affected by a natural disaster')
 ```
-Note: stable(?) number of affected countries per year.
 
+Note: stable(?) number of affected countries per year.
 
 -   slighty decreasing mean yearly number of natural disasters per country.
 
@@ -112,7 +113,6 @@ em_dat |>
   labs(x='Year', y='# Natural disasters',
        title='Annual number of natural disasters per country')
 ```
-
 
 -   Stable share of 'reported/large' extreme events.
 
@@ -144,7 +144,6 @@ em_dat |>
         legend.position = 'bottom') +
   labs(x='Year', y='', fill="State of emergency | Request for international assistance")
 ```
-
 
 -   Among 'large/reported',
 
@@ -242,7 +241,6 @@ appeal_df <- appeal_binary |>
   mutate(events_cum = as.integer(cumsum(events_freq)), .by=country)
 ```
 
-
 ```{r appeal_events}
 
 ## Merge
@@ -297,11 +295,9 @@ em_dat_events <-  left_join(country_year_sample, cum_events_df,
     fill(cum_events, .direction = "down")
 ```
 
-
 ```{r}
 save(em_dat, file = here('data', 'em_dat_events.RData'))
 ```
-
 
 ```{r}
 #| layout-ncol: 2
@@ -387,6 +383,4 @@ pheatmap::pheatmap(cum_x |> slice_head(n=100),
 seq(min(x |> select(-total)), max(x |> select(-total)), length.out = 10)
 ```
 
-
-
-- trend per country
+-   trend per country

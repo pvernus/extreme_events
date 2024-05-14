@@ -1,0 +1,250 @@
+---
+title: "Differences between No-/Appeal years"
+format: html
+editor: visual
+---
+
+```{r}
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(
+  tidyverse,
+  rstatix,
+  ggpubr
+  )
+```
+
+# Recipient level
+
+## Volume
+
+```{r}
+
+finance <- assignment |>
+  filter(!is.na(disbursement)) |> 
+  filter(sum(appeal_n, na.rm = T) != 0, 
+         .by = c(recipient_code, recipient_name)) |> 
+  mutate(appeal = fct(if_else(appeal_n != 0, "Yes", "No"))) |>
+  summarize(
+    commitment_mean = mean(commitment, na.rm = T),
+    disbursement_mean = mean(disbursement, na.rm = T),
+    .by = c(recipient_name, appeal)
+  )
+```
+
+### Cleveland plot
+
+```{r}
+
+finance |> 
+  pivot_wider(id_cols = -commitment_mean, 
+              names_from = appeal, values_from = disbursement_mean) |> 
+  mutate(recipient_name = fct_reorder(recipient_name, No)) |> 
+  ggplot() +
+  geom_segment(aes(x=recipient_name, xend=recipient_name, y=No, yend=Yes), 
+               color="grey40") +
+  geom_point( aes(x=recipient_name, y=No), color="darkgrey", size=3 ) +
+  geom_point( aes(x=recipient_name, y=Yes), color="orange", size=3 ) +
+  coord_flip()+
+  xlab("") +
+  ylab("Avg. yearly disbursement, MUSD") +
+  theme_light()
+```
+
+### Boxplot
+
+```{r}
+ggplot(finance,
+       aes(x=appeal, y=disbursement_mean)) +
+  geom_boxplot(fill = c("darkgrey", "orange")) +
+  theme_light() +
+  labs(y="Avg. yearly disbursement, MUSD")
+```
+
+### Desc. stat.
+
+```{r}
+# compare two groups (non-parametric test)
+finance |> 
+  rename(`Commitment, MUSD (avg)` = commitment_mean,
+         `Disbursements, MUSD (avg)` = disbursement_mean) |> 
+  tbl_summary(
+    by=appeal,
+    include = -recipient_name,
+    type = list(
+      `Commitment, MUSD (avg)` ~ "continuous",
+      `Disbursements, MUSD (avg)` ~ "continuous")
+  ) |> 
+  add_p(test = list(
+    all_continuous() ~ "paired.wilcox.test"),
+    group = recipient_name)
+
+# compare two groups (non-parametric test)
+finance  %>%
+  wilcox_test(disbursement_mean ~ appeal, paired = TRUE) |> 
+  add_significance()
+
+finance  %>%
+  wilcox_test(commitment_mean ~ appeal, paired = TRUE) |> 
+  add_significance()
+
+# effect size
+finance |> 
+  rstatix::wilcox_effsize(disbursement_mean ~ appeal,
+                          paired = TRUE)
+finance |> 
+  rstatix::wilcox_effsize(commitment_mean ~appeal,
+                          paired = TRUE)
+```
+
+## Channel of delivery
+
+```{r}
+channel <- assignment |>
+  filter(!is.na(disbursement)) |> 
+  filter(sum(appeal_n, na.rm = T) != 0, .by = c(recipient_code, recipient_name)) |> 
+  rename(appeal = appeal_n) |> 
+  mutate(appeal = if_else(appeal != 0, "Yes", "No")) |>
+  summarize(
+    channel_nonstate_mean = mean(channel_nonstate, na.rm = T),
+    channel_nonstate_ngo_mean = mean(channel_nonstate_ngo, na.rm = T),
+    channel_nonstate_other_mean = mean(channel_nonstate_other, na.rm = T),
+    .by = c(recipient_name, appeal)
+  )
+```
+
+### Cleveland plot
+
+```{r}
+# nonState
+channel |> 
+  pivot_wider(id_cols = recipient_name, 
+              names_from = appeal, values_from = channel_nonstate_mean) |> 
+  mutate(recipient_name = fct_reorder(recipient_name, No)) |> 
+  ggplot() +
+  geom_segment(aes(x=recipient_name, xend=recipient_name, y=No, yend=Yes), 
+               color="grey40") +
+  geom_point( aes(x=recipient_name, y=No), color="darkgrey", size=3 ) +
+  geom_point( aes(x=recipient_name, y=Yes), color="orange", size=3 ) +
+  coord_flip()+
+  xlab("") +
+  ylab("Avg. share of nonState bypass") +
+  theme_light()
+
+# nonState NGO
+channel |> 
+  pivot_wider(id_cols = recipient_name, 
+              names_from = appeal, values_from = channel_nonstate_ngo_mean) |> 
+  mutate(recipient_name = fct_reorder(recipient_name, No)) |> 
+  ggplot() +
+  geom_segment(aes(x=recipient_name, xend=recipient_name, y=No, yend=Yes), 
+               color="grey40") +
+  geom_point( aes(x=recipient_name, y=No), color="darkgrey", size=3 ) +
+  geom_point( aes(x=recipient_name, y=Yes), color="orange", size=3 ) +
+  coord_flip()+
+  xlab("") +
+  ylab("Avg. share of nonState NGO bypass") +
+  theme_light()
+
+# nonState Other
+channel |> 
+  pivot_wider(id_cols = recipient_name, 
+              names_from = appeal, values_from = channel_nonstate_other_mean) |> 
+  mutate(recipient_name = fct_reorder(recipient_name, No)) |> 
+  ggplot() +
+  geom_segment(aes(x=recipient_name, xend=recipient_name, y=No, yend=Yes), 
+               color="grey40") +
+  geom_point( aes(x=recipient_name, y=No), color="darkgrey", size=3 ) +
+  geom_point( aes(x=recipient_name, y=Yes), color="orange", size=3 ) +
+  coord_flip()+
+  xlab("") +
+  ylab("Avg. share of nonState nonNGO bypass") +
+  theme_light()
+```
+
+### Boxplot
+
+```{r}
+channel |> 
+  pivot_longer(cols = starts_with("channel"), 
+               names_to = "channel", values_to = "share") |> 
+  ggplot(aes(x=appeal, y=share, fill=channel)) +
+  geom_boxplot() +
+  theme_light() +
+  labs(x="Disaster year leading to intern. assistance appeal", 
+       y="Avg. share of nonState nonNGO bypass")
+```
+
+### Desc. stat.
+
+```{r}
+# Compare two groups
+channel |> 
+  tbl_summary(
+    by=appeal,
+    include = -recipient_name,
+    type = list(
+      channel_nonstate_mean ~ "continuous",
+      channel_nonstate_ngo_mean ~ "continuous",
+      channel_nonstate_other_mean ~ "continuous")
+  ) |> 
+  add_p(test = list(
+    all_continuous() ~ "paired.wilcox.test"),
+    group = recipient_name)
+
+# compare two groups (non-parametric test)
+channel  %>%
+  wilcox_test(channel_nonstate_mean ~ appeal, paired = TRUE) |> 
+  add_significance()
+
+channel  %>%
+  wilcox_test(channel_nonstate_ngo_mean ~ appeal, paired = TRUE) |> 
+  add_significance()
+
+channel  %>%
+  wilcox_test(channel_nonstate_other_mean ~ appeal, paired = TRUE) |> 
+  add_significance()
+
+# effect size
+channel |> 
+  rstatix::wilcox_effsize(channel_nonstate_mean ~ appeal,
+                          paired = TRUE)
+channel |> 
+  rstatix::wilcox_effsize(channel_nonstate_ngo_mean ~ appeal,
+                          paired = TRUE)
+
+channel |> 
+  rstatix::wilcox_effsize(channel_nonstate_other_mean ~ appeal,
+                          paired = TRUE)
+```
+
+## Number of donors
+
+```{r}
+donor <- assignment |>
+  filter(!is.na(disbursement)) |> 
+  filter(sum(appeal_n, na.rm = T) != 0, .by = c(recipient_code, recipient_name)) |> 
+  rename(appeal = appeal_n) |> 
+  mutate(appeal = if_else(appeal != 0, "Yes", "No")) |>
+  mutate(n_donor = n_distinct(donor_code), .by = c(recipient_code, recipient_name, year)) |> 
+  summarize(
+    n_donor_mean = mean(n_donor, na.rm = T),
+    n_donor_median = median(n_donor, na.rm = T),
+    .by = c(recipient_name, appeal)
+  )
+```
+
+```{r}
+donor |> 
+  pivot_wider(id_cols = recipient_name,
+              names_from = appeal, values_from = n_donor_median) |> 
+  arrange(desc(Yes)) |> 
+  mutate(recipient_name = fct_reorder(as.factor(recipient_name), No)) |> 
+  ggplot() +
+  geom_segment( aes(x=recipient_name, xend=recipient_name, y=No, yend=Yes), color="grey") +
+  geom_point( aes(x=recipient_name, y=No), color="darkgrey", size=3 ) +
+  geom_point( aes(x=recipient_name, y=Yes), color="orange", size=3 ) +
+  coord_flip()+
+  xlab("") +
+  ylab("Number of donors") +
+  theme_light()
+```
