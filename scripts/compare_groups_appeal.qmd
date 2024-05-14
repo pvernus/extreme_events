@@ -5,6 +5,10 @@ editor: visual
 ---
 
 ```{r}
+source(here::here('scripts', 'aid_margins_shocks.qmd'))
+```
+
+```{r}
 if (!require("pacman")) install.packages("pacman")
 pacman::p_load(
   tidyverse,
