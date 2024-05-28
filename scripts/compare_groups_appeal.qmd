@@ -175,7 +175,7 @@ channel |>
   geom_boxplot() +
   theme_light() +
   labs(x="Disaster year leading to intern. assistance appeal", 
-       y="Avg. share of nonState nonNGO bypass")
+       y="Share (%)")
 ```
 
 ### Desc. stat.
