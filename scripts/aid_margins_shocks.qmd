@@ -618,13 +618,13 @@ We add new binary treatment variables (=1 if any event during the year t in coun
 ```{r}
 estimand_mediator_treatment <- estimand_mediator_treatment |> 
   mutate(
-    event_dummy = ifelse(event_n %in% c(0,NA), 0, 1),
-    call_dummy = ifelse(call_n %in% c(0,NA), 0, 1),
-    appeal_dummy = ifelse(appeal_n %in% c(0,NA), 0, 1),
-    declaration_dummy = ifelse(declaration_n %in% c(0,NA), 0, 1),
-    never_treated_event_dummy = ifelse(event_dummy == 0 & event_cum == 0, 1, 0),
-    never_treated_call_dummy = ifelse(call_dummy == 0 & call_cum == 0, 1, 0),
-    never_treated_appeal_dummy = ifelse(appeal_dummy == 0 & appeal_cum == 0, 1, 0)
+    switching_event_dummy = ifelse(event_n %in% c(0,NA), 0, 1),
+    switching_call_dummy = ifelse(call_n %in% c(0,NA), 0, 1),
+    switching_appeal_dummy = ifelse(appeal_n %in% c(0,NA), 0, 1),
+    switching_declaration_dummy = ifelse(declaration_n %in% c(0,NA), 0, 1),
+    single_event_dummy = ifelse(switching_event_dummy == 0 & event_cum == 0, 0, 1),
+    single_call_dummy = ifelse(switching_call_dummy == 0 & call_cum == 0, 0, 1),
+    single_appeal_dummy = ifelse(switching_appeal_dummy == 0 & appeal_cum == 0, 0, 1)
   )
 ```
 
@@ -674,7 +674,7 @@ assignment |>
 
 # treatment
 assignment |> 
-  select(event_n:declaration_dummy) |> 
+  select(event_n:switching_declaration_dummy) |> 
   summary()
 ```
 
@@ -685,8 +685,8 @@ Boxplot: climate-related binary switching disasters
 ```{r}
 summarize(assignment,
   commit = sum(commitment, na.rm = T), # disb = sum(disbursement, na.rm = T)
-  .by = c(recipient_name, year, event_dummy)) |> 
-  ggplot(aes(x = event_dummy, y = log(commit), colour = event_dummy)) +
+  .by = c(recipient_name, year, switching_event_dummy)) |> 
+  ggplot(aes(x = switching_event_dummy, y = log(commit), colour = switching_event_dummy)) +
   geom_boxplot() +
   theme_minimal() +
   theme(legend.position = "none") +
@@ -702,9 +702,9 @@ Treatment plot
 ## Binary switching treatment
 # pivot to wider
 plot_treat_binary <- distinct(assignment,
-         recipient_name, year, event_dummy) |> 
-  mutate(event_dummy = as.numeric(levels(event_dummy))[event_dummy]) |> 
-  pivot_wider(names_from = 'year', values_from = 'event_dummy') |> 
+         recipient_name, year, switching_event_dummy) |> 
+  mutate(switching_event_dummy = as.numeric(levels(switching_event_dummy))[switching_event_dummy]) |> 
+  pivot_wider(names_from = 'year', values_from = 'switching_event_dummy') |> 
   rowwise() |> 
   mutate(total = sum(c_across(`2002`:`2022`), na.rm = T)) |> 
   ungroup() |> 
@@ -731,9 +731,9 @@ Binary switching *call* treatment
 ## Binary switching treatment
 # pivot to wider
 plot_call_binary <- distinct(assignment,
-         recipient_name, year, call_dummy) |> 
-  mutate(call_dummy = as.numeric(levels(call_dummy))[call_dummy]) |> 
-  pivot_wider(names_from = 'year', values_from = 'call_dummy') |> 
+         recipient_name, year, switching_call_dummy) |> 
+  mutate(switching_call_dummy = as.numeric(levels(switching_call_dummy))[switching_call_dummy]) |> 
+  pivot_wider(names_from = 'year', values_from = 'switching_call_dummy') |> 
   rowwise() |> 
   mutate(total = sum(c_across(`2002`:`2022`), na.rm = T)) |> 
   ungroup() |> 
@@ -754,7 +754,12 @@ pheatmap::pheatmap(plot_treat_binary |> select(-total),
 ```
 
 ```{r}
-save(assignment, file = here("data", "assignment.RData"))
+assignment_universe <- assignment[dummy_universe == 1] # rm obs where one of the actor where not registered in the crs data base at/before year t
+```
+
+
+```{r}
+save(assignment_universe, file = here("data", "assignment.RData"))
 ```
 
 
