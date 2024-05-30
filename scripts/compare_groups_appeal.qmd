@@ -663,32 +663,34 @@ table_sum <- function(data){
 
 # FIRST DIFFERENCE COMPARISONS
 
+# Recipient level
+
 ## Flows
 
 ### Disbursements
 
 ```{r}
-flow <- copy(recipient_data)
-flow <- flow[, .(recipient_code, year, disbursement, treatment = switching_appeal_dummy)
+flow_disb_data <- copy(recipient_data)
+flow_disb_data <- flow_disb_data[, .(recipient_code, year, disbursement, treatment = switching_appeal_dummy)
 ][, .(
   disb = sum(disbursement, na.rm = T)
 ), by = .(recipient_code, year, treatment)
 ][, disb_lag1 := shift(disb, type = "lag"), by = recipient_code
 ][, first_diff := disb - disb_lag1
 ][, var := (disb - disb_lag1)/disb_lag1 * 100, by = recipient_code]
-flow
+head(flow_disb_data)
 ```
 
 ```{r}
 ## Variation rate
 # stats
-stat <- summarize(flow,
+stat <- summarize(flow_disb_data,
                   mean=mean(var, na.rm = T),
                   median=median(var, na.rm = T),
                   .by = treatment)
 
 # histogram
-flow |> 
+flow_disb_data |> 
   slice_min(var, prop = .9) |>
     ggplot(aes(x=var, fill=treatment)) +
     geom_histogram(alpha=.3) +
@@ -697,7 +699,7 @@ flow |>
   theme_minimal()
 
 # boxplot
-flow |> 
+flow_disb_data |> 
   slice_min(var, prop = .9) |> 
   ggbetweenstats(
   x = treatment,
@@ -706,21 +708,23 @@ flow |>
   results.subtitle = F,
   xlab = "Disaster year (=1)",
   ylab = "Variation rate (%)",
-  title = "Difference in variation rates of disbursements between disaster and non-disaster years.",
+  title = "Comparison of changes in disbursements between disaster and non-disaster years.",
   subtitle = "Recipient country-year level"
 )
 ```
 
+> Difference to confirm
+
 ```{r}
 ## First difference
 # stats
-stat <- summarize(flow,
+stat <- summarize(flow_disb_data,
                   mean=mean(first_diff, na.rm = T),
                   median=median(first_diff, na.rm = T),
                   .by = treatment)
 
 # histogram
-flow |> 
+flow_disb_data |> 
   slice_min(first_diff, prop = .9) |>
     ggplot(aes(x=first_diff, fill=treatment)) +
     geom_histogram(alpha=.3) +
@@ -729,7 +733,7 @@ flow |>
   theme_minimal()
 
 # boxplot
-flow |> 
+flow_disb_data |> 
   slice_min(first_diff, prop = .9) |> 
   ggbetweenstats(
   x = treatment,
@@ -738,34 +742,36 @@ flow |>
   results.subtitle = F,
   xlab = "Disaster year (=1)",
   ylab = "First difference (t - t-1)",
-  title = "Difference in disbursements between disaster and non-disaster years."
+  title = "Comparison of changes in disbursements between disaster and non-disaster years."
 )
 ```
+
+> Difference to confirm
 
 ### Commitments
 
 ```{r}
-flow <- copy(recipient_data)
-flow <- flow[, .(recipient_code, year, commitment, treatment = switching_appeal_dummy)
+flow_commit_data <- copy(recipient_data)
+flow_commit_data <- flow_commit_data[, .(recipient_code, year, commitment, treatment = switching_appeal_dummy)
 ][, .(
   commit = sum(commitment, na.rm = T)
 ), by = .(recipient_code, year, treatment)
 ][, commit_lag1 := shift(commit, type = "lag"), by = recipient_code
 ][, first_diff := commit - commit_lag1
 ][, var := (commit - commit_lag1)/commit_lag1 * 100, by = recipient_code]
-flow
+head(flow_commit_data)
 ```
 
 ```{r}
 ## Variation rate
 # stats
-stat <- summarize(flow,
+stat <- summarize(flow_commit_data,
                   mean=mean(var, na.rm = T),
                   median=median(var, na.rm = T),
                   .by = treatment)
 
 # histogram
-flow |> 
+flow_commit_data |> 
   slice_min(var, prop = .9) |>
     ggplot(aes(x=var, fill=treatment)) +
     geom_histogram(alpha=.3) +
@@ -774,7 +780,7 @@ flow |>
   theme_minimal()
 
 # boxplot
-flow |> 
+flow_commit_data |> 
   slice_min(var, prop = .9) |> 
   ggbetweenstats(
   x = treatment,
@@ -783,20 +789,21 @@ flow |>
   results.subtitle = F,
   xlab = "Disaster year (=1)",
   ylab = "Variation rate (%)",
-  title = "Difference in commitments percentage changes between disaster and non-disaster years."
+  title = "Comparison of changes in commitments between disaster and non-disaster years."
 )
 ```
+> Difference to confirm
 
 ```{r}
 ## First difference
 # stats
-stat <- summarize(flow,
+stat <- summarize(flow_commit_data,
                   mean=mean(first_diff, na.rm = T),
                   median=median(first_diff, na.rm = T),
                   .by = treatment)
 
 # histogram
-flow |> 
+flow_commit_data |> 
   slice_min(first_diff, prop = .9) |>
     ggplot(aes(x=first_diff, fill=treatment)) +
     geom_histogram(alpha=.3) +
@@ -805,7 +812,7 @@ flow |>
   theme_minimal()
 
 # boxplot
-flow |> 
+flow_commit_data |> 
   slice_min(first_diff, prop = .9) |> 
   ggbetweenstats(
   x = treatment,
@@ -814,29 +821,231 @@ flow |>
   results.subtitle = F,
   xlab = "Disaster year (=1)",
   ylab = "First difference (t - t-1)",
-  title = "Difference in commitments between disaster and non-disaster years."
+  title = "Comparison of changes in commitments between disaster and non-disaster years."
 )
 ```
-
-
+> No significant difference.
 
 ## Extensive margin
 
 ```{r}
-data <- copy(recipient_data)
-data[, .(recipient_code, year, donor_code, sector_code, disbursement, treatment = switching_appeal_dummy)
+xmarg_data <- copy(recipient_data)
+xmarg_data <- xmarg_data[, .(recipient_code, year, donor_code, sector_code, disbursement, treatment = switching_appeal_dummy)
 ][, .(
   nb_donor = uniqueN(sector_code[disbursement > 0]),
   nb_sector = uniqueN(donor_code[disbursement > 0])
 ), by = .(recipient_code, year, treatment)
-][]
+][, `:=` (
+  nb_donor_lag1 = shift(nb_donor, type = "lag"),
+  nb_sector_lag1 = shift(nb_sector, type = "lag")
+), by = recipient_code
+][, `:=` (
+  first_diff_donor = nb_donor - nb_donor_lag1,
+  first_diff_sector = nb_sector - nb_sector_lag1
+)]
+
+head(xmarg_data)
 ```
 
+### Donors
 
+```{r}
+# stats
+stat <- summarize(xmarg_data,
+                  mean=mean(first_diff_donor, na.rm = T),
+                  median=median(first_diff_donor, na.rm = T),
+                  .by = treatment)
 
+# histogram
+xmarg_data |> 
+  slice_min(first_diff_donor, prop = .9) |>
+    ggplot(aes(x=first_diff_donor, fill=treatment)) +
+    geom_histogram(alpha=.3) +
+    geom_vline(data=stat, aes(xintercept = mean, color=treatment)) +
+    geom_vline(data=stat, aes(xintercept = median, color=treatment), linetype="dotted") +
+  theme_minimal()
 
+# boxplot
+xmarg_data |> 
+  slice_min(first_diff_donor, prop = .9) |> 
+  ggbetweenstats(
+  x = treatment,
+  y = first_diff_donor,
+  type = "np",
+  results.subtitle = F,
+  xlab = "Disaster year (=1)",
+  ylab = "First difference (t - t-1)",
+  title = "Comparison of changes in active donors between disaster and non-disaster years."
+)
+```
 
+> No significant difference.
 
+### Sectors
+
+```{r}
+# stats
+stat <- summarize(xmarg_data,
+                  mean=mean(first_diff_sector, na.rm = T),
+                  median=median(first_diff_sector, na.rm = T),
+                  .by = treatment)
+
+# histogram
+xmarg_data |> 
+  slice_min(first_diff_sector, prop = .9) |>
+    ggplot(aes(x=first_diff_sector, fill=treatment)) +
+    geom_histogram(alpha=.3) +
+    geom_vline(data=stat, aes(xintercept = mean, color=treatment)) +
+    geom_vline(data=stat, aes(xintercept = median, color=treatment), linetype="dotted") +
+  theme_minimal()
+
+# boxplot
+xmarg_data |> 
+  slice_min(first_diff_sector, prop = .9) |> 
+  ggbetweenstats(
+  x = treatment,
+  y = first_diff_sector,
+  type = "np",
+  results.subtitle = F,
+  xlab = "Disaster year (=1)",
+  ylab = "First difference (t - t-1)",
+  title = "Comparison of changes in active sectors between disaster and non-disaster years."
+)
+```
+
+> No significant difference.
+
+## Channel of delivery
+
+```{r}
+channel_data <- copy(recipient_data)
+channel_data <- channel_data[, .(recipient_code, year, treatment = switching_appeal_dummy,
+                                 disbursement, channel_nonstate, channel_nonstate_ngo, 
+                                 channel_nonstate_multi)
+][, .( # share of disbursements through non-state (total, multi, ngo) channels
+  nonstate_pct=100*sum(disbursement[channel_nonstate==1], na.rm=T)/sum(disbursement, na.rm=T),
+  multi_pct=100*sum(disbursement[channel_nonstate_multi==1], na.rm=T)/sum(disbursement, na.rm=T),
+  ngo_pct=100*sum(disbursement[channel_nonstate_ngo==1], na.rm=T)/sum(disbursement, na.rm=T)
+), by = .(recipient_code, year, treatment)
+][, `:=` ( # one-period lag
+  nonstate_lag1 = shift(nonstate_pct, type = "lag"),
+  multi_lag1 = shift(multi_pct, type = "lag"),
+  ngo_lag1 = shift(ngo_pct, type = "lag")
+), by = recipient_code
+][, `:=` ( # first-difference
+  first_diff_nonstate = nonstate_pct - nonstate_lag1,
+  first_diff_multi = multi_pct - multi_lag1,
+  first_diff_ngo = ngo_pct - ngo_lag1
+)]
+head(channel_data)
+```
+
+### Non-State
+
+```{r}
+# stats
+stat <- summarize(channel_data,
+                  mean=mean(first_diff_nonstate, na.rm = T),
+                  median=median(first_diff_nonstate, na.rm = T),
+                  .by = treatment)
+
+# histogram
+channel_data |> 
+  slice_min(first_diff_nonstate, prop = .9) |>
+    ggplot(aes(x=first_diff_nonstate, fill=treatment)) +
+    geom_histogram(alpha=.3) +
+    geom_vline(data=stat, aes(xintercept = mean, color=treatment)) +
+    geom_vline(data=stat, aes(xintercept = median, color=treatment), linetype="dotted") +
+  theme_minimal()
+
+# boxplot
+channel_data |> 
+  slice_min(first_diff_nonstate, prop = .9) |> 
+  ggbetweenstats(
+  x = treatment,
+  y = first_diff_nonstate,
+  type = "np",
+  results.subtitle = F,
+  xlab = "Disaster year (=1)",
+  ylab = "First difference (t - t-1)",
+  title = "Comparison of changes between disaster and non-disaster years\nin the share of disbursements going through non-State channels of delivery."
+)
+```
+
+> No significant change
+
+### Multilaterals
+
+```{r}
+# stats
+stat <- summarize(channel_data,
+                  mean=mean(first_diff_multi, na.rm = T),
+                  median=median(first_diff_multi, na.rm = T),
+                  .by = treatment)
+
+# histogram
+channel_data |> 
+  slice_min(first_diff_multi, prop = .9) |>
+    ggplot(aes(x=first_diff_multi, fill=treatment)) +
+    geom_histogram(alpha=.3) +
+    geom_vline(data=stat, aes(xintercept = mean, color=treatment)) +
+    geom_vline(data=stat, aes(xintercept = median, color=treatment), linetype="dotted") +
+  theme_minimal()
+
+# boxplot
+channel_data |> 
+  slice_min(first_diff_multi, prop = .9) |> 
+  ggbetweenstats(
+  x = treatment,
+  y = first_diff_multi,
+  type = "np",
+  results.subtitle = F,
+  xlab = "Disaster year (=1)",
+  ylab = "First difference (t - t-1)",
+  title = "Comparison of changes between disaster and non-disaster years\nin the share of disbursements going through multilateral channels of delivery."
+)
+```
+> No significant change
+
+### NGOs
+
+```{r}
+# stats
+stat <- summarize(channel_data,
+                  mean=mean(first_diff_ngo, na.rm = T),
+                  median=median(first_diff_ngo, na.rm = T),
+                  .by = treatment)
+
+# histogram
+channel_data |> 
+  slice_min(first_diff_ngo, prop = .9) |>
+    ggplot(aes(x=first_diff_ngo, fill=treatment)) +
+    geom_histogram(alpha=.3) +
+    geom_vline(data=stat, aes(xintercept = mean, color=treatment)) +
+    geom_vline(data=stat, aes(xintercept = median, color=treatment), linetype="dotted") +
+  theme_minimal()
+
+# boxplot
+channel_data |> 
+  slice_min(first_diff_ngo, prop = .9) |> 
+  ggbetweenstats(
+  x = treatment,
+  y = first_diff_ngo,
+  type = "np",
+  results.subtitle = F,
+  xlab = "Disaster year (=1)",
+  ylab = "First difference (t - t-1)",
+  title = "Comparison of changes between disaster and non-disaster years\nin the share of disbursements going through multilateral channels of delivery."
+)
+```
+
+> No significant change
+
+# Recipient-Sector level
+
+# Provider-Recipient level
+
+# Recipient-Provider-Sector level
 
 
 
