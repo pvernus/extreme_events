@@ -176,7 +176,8 @@ Note: for now we focus on **yearly provider-recipient dyads**. However, later we
 
 # Sum of disb. per dyad-sector-year
 setDT(data_disaster)
-qty_dyad_sector_year <- data_disaster[, .(
+qty_dyad_sector_year <- copy(data_disaster)
+qty_dyad_sector_year <- qty_dyad_sector_year[, .(
   commitment = sum(usd_commitment_defl, na.rm = TRUE),
   disbursement = sum(usd_disbursement_defl, na.rm = TRUE)),
   by = .(donor_code, donor_name, recipient_code, recipient_name, sector_code, sector_name, year)
@@ -276,7 +277,8 @@ table(data_disaster$channel_bypass, data_disaster$channel_bypass_private)
 
 ```{r}
 # create new channel-related vars: share of commitments going through nonstate, (nonstate) ngo, and other nonstate actors
-mediator_dyad_sector_year <- data_disaster[, .(
+mediator_dyad_sector_year <- copy(data_disaster)
+mediator_dyad_sector_year <- mediator_dyad_sector_year[, .(
   sh_nonstate = sum(usd_commitment_defl[channel_bypass_ngo != "No"], na.rm = T) / 
     sum(usd_commitment_defl, na.rm = T),
   sh_nonstate_ngo = sum(usd_commitment_defl[channel_bypass_ngo == "Yes (NGO)"], na.rm = T) /
@@ -478,17 +480,11 @@ vis_dat(event_clim_sample)
 vis_miss(event_clim_sample)
 ```
 
-We get a sample of 7048 climate-related disasters recorded between 2000 and 2022.
-
-However, almost 2/3 of observations have missing values for the `magnitude` variable.
-
-> Note: other characteristics quoted in the IPCC that could be relevant for the analysis: - magnitude or intensity; - duration; - frequency; - timing; - spatial extent.
-
 ## Assignment mechanism
 
-For now, we only consider: - the number of event(s) per year in each country and - the cumulative number of events in each country since 2000.
+For now, we only consider: - the number of event(s) per year in each country and - the cumulative number of events in each country since 2002.
 
-Note: the choice of period covered by the analysis will impact the the cumulative number of events in each country.
+> Note: the choice of period covered by the analysis will impact the the cumulative number of events in each country.
 
 -   Create variables for the number of yearly disasters in each country.
 
@@ -501,12 +497,13 @@ Note: the choice of period covered by the analysis will impact the the cumulativ
 ## declaration_n: number of event(s) per year in each country where a state of emergency was declared.
 ## event_cum: cumulative number of events in each country since 2002 (start year of the CRS data set)
 
-treatment <- event_clim_sample[year >= 2002
+treatment <- copy(em_dat)
+treatment <- treatment[year >= 2002
 ][, .( # Number of events
   event_n = .N, 
-  call_n = sum(call == "Yes"),
-  appeal_n = sum(call_type == "Appeal"),
-  declaration_n = sum(call_type == "Declaration")
+  call_n = sum(call == "Yes", na.rm = T),
+  appeal_n = sum(call_type == "Appeal", na.rm = T),
+  declaration_n = sum(call_type == "Declaration", na.rm = T)
   ), 
   by = .(country, iso, year)
 ][order(country, year)
@@ -692,7 +689,7 @@ summarize(assignment,
   theme(legend.position = "none") +
   labs(x="Treatment", y=" Commitment, MUSD (log)", 
        title = "Yearly commitments to recipient countries",
-       subtitle = "Treatment: at least one climate-related disaster recorded during the year")
+       subtitle = "Treatment: at least one disaster recorded during the year")
 ```
 
 Treatment plot
@@ -754,7 +751,8 @@ pheatmap::pheatmap(plot_treat_binary |> select(-total),
 ```
 
 ```{r}
-assignment_universe <- assignment[dummy_universe == 1] # rm obs where one of the actor where not registered in the crs data base at/before year t
+assignment_universe <- copy(assignment)
+assignment_universe <- assignment_universe[dummy_universe == 1] # rm obs where one of the actor where not registered in the crs data base at/before year t
 ```
 
 
