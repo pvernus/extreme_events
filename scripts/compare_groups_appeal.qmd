@@ -20,23 +20,28 @@ pacman::p_load(
   )
 ```
 
-- We focus on **disbursement** and **'appeal' events** (proxy of the most extreme events / disasters).
-- We restrict the data to pairs of actors both registered in the CRS data set at year t.
-- we remove countries that have not experienced an 'appeal' event during the period 2002-2022.
+-   We focus on disasters which led to a \*call for international assistance\*\* (proxy for the most extreme events). We'll call such events "appeal disasters".
+-   We restrict the data to pairs of actors both registered in the CRS data set at year t.
+-   we remove countries that have not experienced any appeal disaster over the period 2002-2022.
 
 ```{r}
+# data
 data_appeal <- copy(assignment_universe)
 data_appeal <- data_appeal[, never_treated := sum(appeal_n, na.rm = TRUE),
                                    by = recipient_name
 ][never_treated != 0]
+```
 
+```{r}
 # donors' characteristics
 donor_chars <- unique(data_delivery[!(donor_code==75 & bi_multi=="Private Sector"),
                                     .(donor_code, bi_multi)])
 # recipients' characteristics
 recipient_chars <- unique(data_delivery[, .(
   recipient_code, region_name, incomegroup_name)])
+```
 
+```{r}
 # join
 data_appeal <- merge(data_appeal, donor_chars, by="donor_code")
 data_appeal <- merge(data_appeal, recipient_chars, by="recipient_code")
@@ -45,653 +50,36 @@ data_appeal <- merge(data_appeal, recipient_chars, by="recipient_code")
 # Recipient level
 
 ```{r}
-# create dummy variable for channel of delivery
-# Takes value 1 if country's share of nonstate  > year average share of nonstate
-nonstate_dummy <-  copy(data_delivery)
-nonstate_dummy <-  nonstate_dummy[, .(recipient_code, year, channel_bypass, usd_disbursement)
-][, .(
-  nonstate_pct = sum(usd_disbursement[channel_bypass=='Yes'], na.rm=T)/
-                                  sum(usd_disbursement, na.rm=T)
-  ), by = .(recipient_code, year)
-][, nonstate_year_mean := mean(nonstate_pct, na.rm = T), by=year
-][, nonstate_dummy := ifelse(nonstate_pct > nonstate_year_mean, "High", "Low")
-][order(recipient_code, year)
-][, nonstate_dummy_lag := shift(nonstate_dummy, n=1L, type="lag"), by=recipient_code][]
-
-recipient_data <- merge(data_appeal, nonstate_dummy, by=c("recipient_code", "year"), all.x=T)
+recipient_data <- copy(data_appeal)
 ```
-
-## Extensive margin
-
-```{r}
-recipient_data_xmarg <- copy(recipient_data)
-recipient_data_xmarg <- recipient_data_xmarg[, .(year, recipient_code, recipient_name,  # population
-                donor_code, sector_code, disbursement, # Estimand
-                treatment = switching_appeal_dummy) # Treatment
-][, .(
-  nb_donor = uniqueN(donor_code[disbursement!=0]), 
-  nb_sector = uniqueN(sector_code[disbursement!=0])
-), by = .(year, recipient_code, recipient_name, treatment)
-][order(recipient_name, -year)
-]
-```
-
-### Donor
-
-```{r}
-# data
-diff <- copy(recipient_data_xmarg)
-diff <- diff[, `:=` (
-  nb_donor_post = shift(nb_donor, 1L, type="lag"),
-  nb_donor_pre = shift(nb_donor, 1L, type="lead")),
-  by = recipient_name
-][, `:=` (
-  `t - t-1` = nb_donor - nb_donor_pre,
-  `t+1 - t` = nb_donor_post - nb_donor
-)
-][treatment==1]
-
-# wide to long
-dt_long <- melt(diff, 
-                id.vars = c("year", "recipient_name"),
-                measure.vars = c("t - t-1", "t+1 - t"),
-                variable.name = "period",
-                value.name = "diff")
-
-# country-level stats
-stat <- summarize(dt_long, 
-                  mean=mean(diff, na.rm = T),
-                  median=median(diff, na.rm = T),
-                  .by = period)
-
-# histogram
-dt_long |> 
-  filter(!is.na(diff)) |> 
-  ggplot(aes(x=diff, color=period, fill=period)) +
-  geom_histogram(alpha=.3, position = "identity", binwidth=1) +
-  geom_vline(data=stat, aes(xintercept = mean,
-                            color = period)) +
-  geom_vline(data=stat, aes(xintercept = median,
-                            color = period),
-             linetype="dotted") +
-  labs(x = "Difference in the number of donors", 
-       title = "Difference in the number of donors between disaster year and the previous/next years",
-       subtitle = "period t = year of (at least one) weather or climate-related disaster",
-       caption = "Linetype: straight=mean, dotted=median") +
-  theme_minimal() +
-  theme(legend.position = "bottom")
-
-# table summary
-dt_long |> 
-  rename(Difference = diff) |> 
-  tbl_summary(
-    by = period,
-    include="Difference"
-  ) |> 
-  add_p()
-```
-
-> No significant difference in the number of donors between years of disaster and their previous/next years.
-
-### Sector
-
-```{r}
-# data
-diff <- copy(recipient_data_xmarg)
-diff <- diff[, `:=` (
-  nb_sector_post = shift(nb_sector, 1L, type="lag"),
-  nb_sector_pre = shift(nb_sector, 1L, type="lead")),
-  by = recipient_name
-][, `:=` (
-  `t - t-1` = nb_sector - nb_sector_pre,
-  `t+1 - t` = nb_sector_post - nb_sector
-)
-][treatment==1]
-
-head(diff)
-
-# wide to long
-dt_long <- melt(diff, 
-                id.vars = c("year", "recipient_name"),
-                measure.vars = c("t - t-1", "t+1 - t"),
-                variable.name = "period",
-                value.name = "diff")
-
-# country-level stats
-stat <- summarize(dt_long, 
-                  mean=mean(diff, na.rm = T),
-                  median=median(diff, na.rm = T),
-                  .by = period)
-
-# histogram
-dt_long |> 
-  filter(!is.na(diff)) |> 
-  ggplot(aes(x=diff, color=period, fill=period)) +
-  geom_histogram(alpha=.3, position = "identity", binwidth=1) +
-  geom_vline(data=stat, aes(xintercept = mean,
-                            color = period)) +
-  geom_vline(data=stat, aes(xintercept = median,
-                            color = period),
-             linetype="dotted") +
-  labs(x = "Difference in the number of sectors", 
-       title = "Difference in the number of sectors between the disaster year and the previous/next year",
-       subtitle = "period t = year of weather or climate-related disaster",
-       caption = "Linetype: straight=mean, dotted=median") +
-  theme_minimal() +
-  theme(legend.position = "bottom")
-
-# table summary
-dt_long |> 
-  rename(Difference = diff) |> 
-  tbl_summary(
-    by = period,
-    include=c("Difference")
-  ) |> 
-  add_p()
-```
-
-> Difference in means, nevertheless, no significant difference in the number of sectors between years of disaster and their previous/next years.
 
 ## Intensive margin
 
-Difference in development finance flows between the disaster year and the previous/next years.
-
-```{r}
-recipient_data_imarg <- copy(recipient_data)
-recipient_data_imarg <- recipient_data_imarg[, .(year, recipient_name, treatment = switching_appeal_dummy, disbursement, commitment)
-][, .(
-  disb = sum(disbursement, na.rm = TRUE), 
-  commit = sum(commitment, na.rm = TRUE)
-), by = .(year, recipient_name, treatment)
-][order(recipient_name, -year)
-]
-
-head(recipient_data_imarg)
-```
-
 ### Disbursements
 
 ```{r}
-# data
-diff <- copy(recipient_data_imarg)
-diff <- diff[, `:=` (
-  disb_post = shift(disb, 1L, type="lag"),
-  disb_pre = shift(disb, 1L, type="lead")),
-  by = recipient_name
-][, `:=` (
-  `t - t-1` = disb - disb_pre,
-  `t+1 - t` = disb_post - disb
-)
-][treatment==1]
-
-head(diff)
-
-# wide to long
-dt_long <- melt(diff, 
-                id.vars = c("year", "recipient_name"),
-                measure.vars = c("t - t-1", "t+1 - t"),
-                variable.name = "period",
-                value.name = "diff")
-
-# country-level stats
-stat <- summarize(dt_long, 
-                  mean=mean(diff, na.rm = T),
-                  median=median(diff, na.rm = T),
-                  .by = period)
-
-# histogram
-dt_long |> 
-  filter(!is.na(diff)) |> 
-  ggplot(aes(x=diff, color=period, fill=period)) +
-  geom_density(alpha=.3) +
-  geom_vline(data=stat, aes(xintercept = mean,
-                            color = period)) +
-  geom_vline(data=stat, aes(xintercept = median,
-                            color = period),
-             linetype="dotted") +
-  labs(x = "Difference in disbursements", 
-       title = "Difference in disbursements\nbetween the disaster year and the previous/next year",
-       subtitle = "period t = year of weather or climate-related disaster",
-       caption = "Linetype: straight=mean, dotted=median") +
-  theme_minimal() +
-  theme(legend.position = "bottom")
-
-# table summary
-dt_long |> 
-  rename(Difference = diff) |> 
-  tbl_summary(
-    by = period,
-    include=c("Difference")
-  ) |> 
-  add_p()
-```
-
-> Small difference in medians, nevertheless, no significant difference in disbursements between years of disaster and their previous/next years.
-
-### Commitments
-
-```{r}
-# data
-diff <- copy(recipient_data_imarg)
-diff <- diff[, `:=` (
-  commit_post = shift(commit, 1L, type="lag"),
-  commit_pre = shift(commit, 1L, type="lead")),
-  by = recipient_name
-][, `:=` (
-  `t - t-1` = commit - commit_pre,
-  `t+1 - t` = commit_post - commit
-)
-][treatment==1]
-
-head(diff)
-
-# wide to long
-dt_long <- melt(diff, 
-                id.vars = c("year", "recipient_name"),
-                measure.vars = c("t - t-1", "t+1 - t"),
-                variable.name = "period",
-                value.name = "diff")
-
-# country-level stats
-stat <- summarize(dt_long, 
-                  mean=mean(diff, na.rm = T),
-                  median=median(diff, na.rm = T),
-                  .by = period)
-
-# histogram
-dt_long |> 
-  filter(!is.na(diff)) |> 
-  ggplot(aes(x=diff, color=period, fill=period)) +
-  geom_density(alpha=.3) +
-  geom_vline(data=stat, aes(xintercept = mean,
-                            color = period)) +
-  geom_vline(data=stat, aes(xintercept = median,
-                            color = period),
-             linetype="dotted") +
-  labs(x = "Difference in commitments", 
-       title = "Difference in commitments\nbetween the disaster year and the previous/next year",
-       subtitle = "period t = year of weather or climate-related disaster",
-       caption = "Linetype: straight=mean, dotted=median") +
-  theme_minimal() +
-  theme(legend.position = "bottom")
-
-# table summary
-dt_long |> 
-  rename(Difference = diff) |> 
-  tbl_summary(
-    by = period,
-    include=c("Difference")
-  ) |> 
-  add_p()
-```
-
-> Significant difference in medians, nevertheless, no significant difference in commitments between years of disaster and their previous/next years. 
-
-## Channels of delivery
-
-### Disbursements
-
-```{r}
-recipient_data_treatment <- unique(recipient_data[, .(year, recipient_code, recipient_name, treatment = switching_appeal_dummy)])
-
-recipient_data_channel <- copy(data_delivery)
-recipient_data_channel <- recipient_data_channel[, .(year, recipient_code, recipient_name, 
-                  usd_disbursement_defl, 
-                  channel_bypass, channel_bypass_ngo, channel_bypass_multi)
-][, .(
-  nonstate_pct = 100*sum(usd_disbursement_defl[channel_bypass=="Yes"], na.rm = T)/sum(usd_disbursement_defl, na.rm = T),
-  ngo_pct = 100*sum(usd_disbursement_defl[channel_bypass_ngo=="Yes (NGO)"], na.rm = T)/sum(usd_disbursement_defl, na.rm = T),
-  multi_pct = 100*sum(usd_disbursement_defl[channel_bypass_multi=="Yes (Multi)"], na.rm = T)/sum(usd_disbursement_defl, na.rm = T)
-), by = .(year, recipient_code)
-]
-
-head(recipient_data_treatment)
-head(recipient_data_channel)
-
-recipient_data_channel <- merge(recipient_data_treatment, recipient_data_channel, by = c("year", "recipient_code"), all.x = T)
-head(recipient_data_channel)
-```
-
-```{r}
-tab_shift <- function(data, var){
-
-  # data
-dt <- copy(get(data))
-dt <- dt[, `:=` (
-  post = shift(get(var), 1L, type="lag"),
-  pre = shift(get(var), 1L, type="lead")),
-  by = recipient_name
-][, `:=` (
-  `t - t-1` = get(var) - pre,
-  `t+1 - t` = post - get(var)
-)
-][treatment==1]
-
-# wide to long
-dt_long <- melt(dt, 
-                id.vars = c("year", "recipient_name"),
-                measure.vars = c("t - t-1", "t+1 - t"),
-                variable.name = "period",
-                value.name = "diff")
-
-# country-level stats
-stat <- summarize(dt_long, 
-                  mean=mean(diff, na.rm = T),
-                  median=median(diff, na.rm = T),
-                  .by = period)
-
-# table summary
-tab <- dt_long |> 
-  rename(Difference = diff) |> 
-  tbl_summary(
-    by = period,
-    include=c("Difference")
-  ) |> 
-  add_p()
-
-return(tab)
-
-}
-
-```
-
-#### Non-State
-
-```{r}
-
-tab_shift("recipient_data_channel", "nonstate_pct")
-
-# histogram
-dt_long |> 
-  filter(!is.na(diff)) |> 
-  ggplot(aes(x=diff, color=period, fill=period)) +
-  geom_density(alpha=.3) +
-  geom_vline(data=stat, aes(xintercept = mean,
-                            color = period)) +
-  geom_vline(data=stat, aes(xintercept = median,
-                            color = period),
-             linetype="dotted") +
-  labs(x = "Difference in % of disbursements through non-State channels of delivery", 
-       title = "Difference in the share of disbursements through non-State channels of delivery\nbetween the disaster year and the previous/next years",
-       subtitle = "period t = year of weather or climate-related disaster",
-       caption = "Linetype: straight=mean, dotted=median") +
-  theme_minimal() +
-  theme(legend.position = "bottom")
-
-```
-
-> No significant difference in the share of disbursements through non-State channels of delivery between disaster years and their previous/next years.
-
-#### Multi
-
-```{r}
-
-tab_shift('multi_pct')
-
-# histogram
-dt_long |> 
-  filter(!is.na(diff)) |> 
-  ggplot(aes(x=diff, color=period, fill=period)) +
-  geom_density(alpha=.3) +
-  geom_vline(data=stat, aes(xintercept = mean,
-                            color = period)) +
-  geom_vline(data=stat, aes(xintercept = median,
-                            color = period),
-             linetype="dotted") +
-  labs(x = "Difference in % of disbursements through non-State channels of delivery", 
-       title = "Difference in the share of disbursements through Multilateral channels of delivery\nbetween the disaster year and the previous/next years",
-       subtitle = "period t = year of weather or climate-related disaster",
-       caption = "Linetype: straight=mean, dotted=median") +
-  theme_minimal() +
-  theme(legend.position = "bottom")
-
-```
-
-> No significant difference in the share of disbursements through Multilateral channels of delivery between disaster years and their previous/next years.
-
-#### NGO
-
-```{r}
-
-tab_shift('ngo_pct')
-
-# histogram
-dt_long |> 
-  filter(!is.na(diff)) |> 
-  ggplot(aes(x=diff, color=period, fill=period)) +
-  geom_density(alpha=.3) +
-  geom_vline(data=stat, aes(xintercept = mean,
-                            color = period)) +
-  geom_vline(data=stat, aes(xintercept = median,
-                            color = period),
-             linetype="dotted") +
-  labs(x = "Difference in % of disbursements through non-State channels of delivery", 
-       title = "Difference in the share of disbursements through NGO channels of delivery\nbetween the disaster year and the previous/next years",
-       subtitle = "period t = year of weather or climate-related disaster",
-       caption = "Linetype: straight=mean, dotted=median") +
-  theme_minimal() +
-  theme(legend.position = "bottom")
-
-```
-> No significant difference in the share of disbursements through Multilateral channels of delivery between disaster years and their previous/next years.
-
-### Commitments
-
-# Recipient-Provider (dyad) level
-
-- Number of sectors by donor and recipient country
-- Sum of disbursements by donor and recipient country
-- Share of disbursements through non-State channels of delivery by donor and recipient country
-
-## Extensive margin
-
-```{r}
-sector_dyad_data <- copy(recipient_data)
-sector_dyad_data <- sector_dyad_data[, .(year, treatment = appeal_dummy, id_actor, donor_code, donor_name, recipient_code, recipient_name, sector_code, disbursement)]
-
-# number of sectors per donor-recipient dyad and year.
-sector_dyad_data <- sector_dyad_data[, .(nb_sector = uniqueN(sector_code[disbursement != 0])), 
-                                     by = .(year, treatment, donor_code, recipient_code, id_actor)
-][order(donor_code, recipient_code)]
-
-```
-
-```{r}
-# data
-diff <- copy(sector_dyad_data)
-diff <- diff[, `:=` (
-  post = shift(nb_sector, 1L, type="lag"),
-  pre = shift(nb_sector, 1L, type="lead")),
-  by = c("donor_code", "recipient_code")
-][, `:=` (
-  `t - t-1` = nb_sector - pre,
-  `t+1 - t` = post - nb_sector
-)
-][treatment==1]
-
-# wide to long
-dt_long <- melt(diff, 
-                id.vars = c("year", "donor_code", "recipient_code"),
-                measure.vars = c("t - t-1", "t+1 - t"),
-                variable.name = "period",
-                value.name = "diff")
-
-# country-level stats
-stat <- summarize(dt_long, 
-                  mean=mean(diff, na.rm = T),
-                  median=median(diff, na.rm = T),
-                  .by = period)
-
-# table summary
-dt_long |> 
-  rename(Difference = diff) |> 
-  tbl_summary(
-    by = period,
-    include=c("Difference")
-  ) |> 
-  add_p()
-
-# histogram
-dt_long |> 
-  filter(!is.na(diff)) |> 
-  ggplot(aes(x=diff, color=period, fill=period)) +
-  geom_density(alpha=.3) +
-  geom_vline(data=stat, aes(xintercept = mean,
-                            color = period)) +
-  geom_vline(data=stat, aes(xintercept = median,
-                            color = period),
-             linetype="dotted") +
-  labs(x = "Difference in the number of sectors", 
-       title = "Difference in the number of sectors per donor in recipient countries\nbetween the disaster year and the previous/next years",
-       subtitle = "period t = year of weather or climate-related disaster",
-       caption = "Linetype: straight=mean, dotted=median") +
-  theme_minimal() +
-  theme(legend.position = "bottom")
-```
-
-
-
-
-```{r}
-# function data
-recip_ext_data <- function(dummy){
-  
-  recip_ext <- data[, variety_code := paste(donor_code, sector_code, sep = "_"),
-                    by = recipient_name
-  ][, never_treated := sum(appeal_n, na.rm = TRUE), by = recipient_name
-  ][never_treated != 0
-  ][, treatment := ifelse(get(dummy) == 0, "Not Treated", "Treated")
-  ][, .(
-    n_donor = n_distinct(donor_code[disbursement!=0]),
-    n_sector = n_distinct(sector_code[disbursement!=0]),
-    n_variety = n_distinct(variety_code[disbursement!=0])
-  ), by = .(recipient_name, treatment)
-  ][order(recipient_name)
-  ][]
-  
-return(recip_ext)
-  
-}
-
-# function table
-table_sum <- function(data){
-  
-  table <- data |> 
-  rename(Donors = n_donor,
-         Sectors = n_sector,
-         Variety = n_variety) |> 
-  tbl_summary(
-    by=treatment,
-    include = -recipient_name,
-    type = list(
-      Donors ~ "continuous",
-      Sectors ~ "continuous",
-      Variety ~ "continuous"
-      )) |> 
-  add_p(test = list(
-    all_continuous() ~ "paired.wilcox.test"),
-    group = recipient_name)
-  
-  return(table)
-}
-```
-
-```{r}
-recip_ext_switch <- recip_ext_data('appeal_dummy')
-recip_ext_single <- recip_ext_data('never_treated_appeal')
-```
-
-```{r}
-# 
-table_sum(recip_ext_switch) |> modify_caption("Switching Treatment")
-table_sum(recip_ext_single) |> modify_caption("Single Treatment")
-```
-
-> During the year of a disaster, the number of active providers, sectors, and provider-sector pairs decrease significantly.
->
-> The remaining providers and sectors are not necessarily the same.
-
-## Intensive margin (mean flows)
-
-```{r}
-# function 1
-intensive_data <- function(dummy){
-  
-dt <- data[, variety_code := paste(donor_code, sector_code, sep = "_")
-  ][, never_treated := sum(appeal_n, na.rm = TRUE), by = recipient_name
-  ][never_treated != 0
-  ][, treatment := ifelse(get(dummy) == 0, "Not Treated", "Treated")
-  ][, donor := sum(disbursement, na.rm = T), 
-    by = .(recipient_name, donor_code, year, treatment)
-  ][, sector := sum(disbursement, na.rm = T), 
-    by = .(recipient_name, sector_code, year, treatment)
-  ][, variety := sum(disbursement, na.rm = T), 
-    by = .(recipient_name, variety_code, year, treatment)
-  ][, .(
-    donor_mean = mean(donor, na.rm = T),
-    sector_mean = mean(sector, na.rm = T),
-    variety_mean = mean(variety, na.rm = T)
-  ), by = .(recipient_name, treatment)
-  ][order(recipient_name)
-  ]
-  
-return(dt)
-  
-}
-
-test <- intensive_data('appeal_dummy')
-
-# function table
-table_sum <- function(data){
-  
-  table <- test |> 
-  tbl_summary(
-    by=treatment,
-    include = -recipient_name
-      ) |> 
-  add_p(test = list(
-    all_continuous() ~ "paired.wilcox.test"),
-    group = recipient_name)
-  
-  return(table)
-}
-```
-
-> On average, disbursement at the donor, sector, and donor-sector pair levels decrease significantly during the year of a disaster.
-
-----
-
-# FIRST DIFFERENCE COMPARISONS
-
-# Recipient level
-
-## Flows
-
-### Disbursements
-
-```{r}
-flow_disb_data <- copy(recipient_data)
-flow_disb_data <- flow_disb_data[, .(recipient_code, year, disbursement, treatment = switching_appeal_dummy)
+imarg_disb_data <- copy(recipient_data)
+imarg_disb_data <- imarg_disb_data[, .(recipient_code, year, disbursement, treatment = appeal_n)
 ][, .(
   disb = sum(disbursement, na.rm = T)
 ), by = .(recipient_code, year, treatment)
 ][, disb_lag1 := shift(disb, type = "lag"), by = recipient_code
 ][, first_diff := disb - disb_lag1
-][, var := (disb - disb_lag1)/disb_lag1 * 100, by = recipient_code]
-head(flow_disb_data)
+][, var := (disb - disb_lag1)/disb_lag1 * 100, by = recipient_code
+][, treatment := as_factor(treatment)]
+head(imarg_disb_data)
 ```
 
 ```{r}
 ## Variation rate
 # stats
-stat <- summarize(flow_disb_data,
+stat <- summarize(imarg_disb_data,
                   mean=mean(var, na.rm = T),
                   median=median(var, na.rm = T),
                   .by = treatment)
 
 # histogram
-flow_disb_data |> 
-  slice_min(var, prop = .9) |>
+imarg_disb_data |> 
     ggplot(aes(x=var, fill=treatment)) +
     geom_histogram(alpha=.3) +
     geom_vline(data=stat, aes(xintercept = mean, color=treatment)) +
@@ -699,33 +87,40 @@ flow_disb_data |>
   theme_minimal()
 
 # boxplot
-flow_disb_data |> 
-  slice_min(var, prop = .9) |> 
+imarg_disb_data |> 
   ggbetweenstats(
   x = treatment,
   y = var,
   type = "np",
   results.subtitle = F,
-  xlab = "Disaster year (=1)",
+  xlab = "# of 'appeal' disaster per year",
   ylab = "Variation rate (%)",
-  title = "Comparison of changes in disbursements between disaster and non-disaster years.",
+  title = "Comparison of changes in disbursements",
   subtitle = "Recipient country-year level"
 )
+
+# table
+tbl_summary(
+  data = imarg_disb_data,
+  by = treatment,
+  include = var,
+  label = list(var = "Variation rate (%)")
+) |> 
+  add_p()
 ```
 
-> Difference to confirm
+> Difference (not statistically significant)
 
 ```{r}
-## First difference
+## First-difference
 # stats
-stat <- summarize(flow_disb_data,
+stat <- summarize(imarg_disb_data,
                   mean=mean(first_diff, na.rm = T),
                   median=median(first_diff, na.rm = T),
                   .by = treatment)
 
 # histogram
-flow_disb_data |> 
-  slice_min(first_diff, prop = .9) |>
+imarg_disb_data |> 
     ggplot(aes(x=first_diff, fill=treatment)) +
     geom_histogram(alpha=.3) +
     geom_vline(data=stat, aes(xintercept = mean, color=treatment)) +
@@ -733,46 +128,55 @@ flow_disb_data |>
   theme_minimal()
 
 # boxplot
-flow_disb_data |> 
-  slice_min(first_diff, prop = .9) |> 
+imarg_disb_data |> 
   ggbetweenstats(
   x = treatment,
   y = first_diff,
   type = "np",
   results.subtitle = F,
-  xlab = "Disaster year (=1)",
+  xlab = "# of 'appeal' disaster per year",
   ylab = "First difference (t - t-1)",
-  title = "Comparison of changes in disbursements between disaster and non-disaster years."
+  title = "Comparison of changes in disbursements",
+  subtitle = "Recipient country-year level"
 )
+
+# table
+tbl_summary(
+  data = imarg_disb_data,
+  by = treatment,
+  include = first_diff,
+  label = list(first_diff = "First-difference")
+) |> 
+  add_p()
 ```
 
-> Difference to confirm
+> Difference (not statistically significant)
 
 ### Commitments
 
 ```{r}
-flow_commit_data <- copy(recipient_data)
-flow_commit_data <- flow_commit_data[, .(recipient_code, year, commitment, treatment = switching_appeal_dummy)
+imarg_commit_data <- copy(recipient_data)
+imarg_commit_data <- imarg_commit_data[, .(recipient_code, year, commitment, treatment = appeal_n)
 ][, .(
   commit = sum(commitment, na.rm = T)
 ), by = .(recipient_code, year, treatment)
 ][, commit_lag1 := shift(commit, type = "lag"), by = recipient_code
 ][, first_diff := commit - commit_lag1
-][, var := (commit - commit_lag1)/commit_lag1 * 100, by = recipient_code]
-head(flow_commit_data)
+][, var := (commit - commit_lag1)/commit_lag1 * 100, by = recipient_code
+][, treatment := as_factor(treatment)]
+head(imarg_commit_data)
 ```
 
 ```{r}
 ## Variation rate
 # stats
-stat <- summarize(flow_commit_data,
+stat <- summarize(imarg_commit_data,
                   mean=mean(var, na.rm = T),
                   median=median(var, na.rm = T),
                   .by = treatment)
 
 # histogram
-flow_commit_data |> 
-  slice_min(var, prop = .9) |>
+imarg_commit_data |> 
     ggplot(aes(x=var, fill=treatment)) +
     geom_histogram(alpha=.3) +
     geom_vline(data=stat, aes(xintercept = mean, color=treatment)) +
@@ -780,31 +184,40 @@ flow_commit_data |>
   theme_minimal()
 
 # boxplot
-flow_commit_data |> 
-  slice_min(var, prop = .9) |> 
+imarg_commit_data |> 
   ggbetweenstats(
   x = treatment,
   y = var,
   type = "np",
   results.subtitle = F,
-  xlab = "Disaster year (=1)",
+  xlab = "# of 'appeal' disaster per year",
   ylab = "Variation rate (%)",
-  title = "Comparison of changes in commitments between disaster and non-disaster years."
+  title = "Comparison of changes in commitments",
+  subtitle = "Recipient country-year level"
 )
+
+# table
+imarg_commit_data |> 
+  tbl_summary(
+  by = treatment,
+  include = var,
+  label = list(var = "Variation rate (%)")
+) |> 
+  add_p()
 ```
-> Difference to confirm
+
+> Difference (not statistically significant)
 
 ```{r}
 ## First difference
 # stats
-stat <- summarize(flow_commit_data,
+stat <- summarize(imarg_commit_data,
                   mean=mean(first_diff, na.rm = T),
                   median=median(first_diff, na.rm = T),
                   .by = treatment)
 
 # histogram
-flow_commit_data |> 
-  slice_min(first_diff, prop = .9) |>
+imarg_commit_data |> 
     ggplot(aes(x=first_diff, fill=treatment)) +
     geom_histogram(alpha=.3) +
     geom_vline(data=stat, aes(xintercept = mean, color=treatment)) +
@@ -812,35 +225,54 @@ flow_commit_data |>
   theme_minimal()
 
 # boxplot
-flow_commit_data |> 
-  slice_min(first_diff, prop = .9) |> 
+imarg_commit_data |> 
   ggbetweenstats(
   x = treatment,
   y = first_diff,
   type = "np",
   results.subtitle = F,
-  xlab = "Disaster year (=1)",
+  xlab = "# of 'appeal' disaster per year",
   ylab = "First difference (t - t-1)",
-  title = "Comparison of changes in commitments between disaster and non-disaster years."
-)
+  title = "Comparison of changes in commitments",
+  subtitle = "Recipient country-year level")
+
+# table
+imarg_commit_data |> 
+  tbl_summary(
+  by = treatment,
+  include = first_diff,
+  label = list(first_diff = "First-difference")
+) |> 
+  add_p()
 ```
-> No significant difference.
+
+> Difference (not statistically significant)
 
 ## Extensive margin
 
 ```{r}
 xmarg_data <- copy(recipient_data)
-xmarg_data <- xmarg_data[, .(recipient_code, year, donor_code, sector_code, disbursement, treatment = switching_appeal_dummy)
+xmarg_data <- xmarg_data[, .(recipient_code, year, 
+                             donor_code, sector_code, disbursement, 
+                             treatment = appeal_n,
+                             bi_multi)
+][, treatment := as_factor(treatment)
 ][, .(
-  nb_donor = uniqueN(sector_code[disbursement > 0]),
-  nb_sector = uniqueN(donor_code[disbursement > 0])
+  nb_donor = uniqueN(donor_code[disbursement > 0]),
+  nb_multi = uniqueN(donor_code[disbursement > 0 & bi_multi=="Multilateral"]),
+  nb_bilat = uniqueN(donor_code[disbursement > 0 & bi_multi=="Bilateral"]),
+  nb_sector = uniqueN(sector_code[disbursement > 0])
 ), by = .(recipient_code, year, treatment)
 ][, `:=` (
   nb_donor_lag1 = shift(nb_donor, type = "lag"),
+  nb_multi_lag1 = shift(nb_multi, type = "lag"),
+  nb_bilat_lag1 = shift(nb_bilat, type = "lag"),
   nb_sector_lag1 = shift(nb_sector, type = "lag")
 ), by = recipient_code
 ][, `:=` (
   first_diff_donor = nb_donor - nb_donor_lag1,
+  first_diff_multi = nb_multi - nb_multi_lag1,
+  first_diff_bilat = nb_bilat - nb_bilat_lag1,
   first_diff_sector = nb_sector - nb_sector_lag1
 )]
 
@@ -848,6 +280,8 @@ head(xmarg_data)
 ```
 
 ### Donors
+
+#### All
 
 ```{r}
 # stats
@@ -858,7 +292,6 @@ stat <- summarize(xmarg_data,
 
 # histogram
 xmarg_data |> 
-  slice_min(first_diff_donor, prop = .9) |>
     ggplot(aes(x=first_diff_donor, fill=treatment)) +
     geom_histogram(alpha=.3) +
     geom_vline(data=stat, aes(xintercept = mean, color=treatment)) +
@@ -867,19 +300,109 @@ xmarg_data |>
 
 # boxplot
 xmarg_data |> 
-  slice_min(first_diff_donor, prop = .9) |> 
   ggbetweenstats(
   x = treatment,
   y = first_diff_donor,
   type = "np",
   results.subtitle = F,
-  xlab = "Disaster year (=1)",
+  xlab = "# of 'appeal' disaster per year",
   ylab = "First difference (t - t-1)",
-  title = "Comparison of changes in active donors between disaster and non-disaster years."
-)
+  title = "Comparison of changes in active donors",
+  subtitle = "Recipient country-year level")
+
+# table
+xmarg_data |> 
+  tbl_summary(
+  by = treatment,
+  include = first_diff_donor,
+  label = list(first_diff_donor = "Donors")
+) |> 
+  add_p()
 ```
 
 > No significant difference.
+
+#### Multilaterals
+
+```{r}
+# stats
+stat <- summarize(xmarg_data,
+                  mean=mean(first_diff_multi, na.rm = T),
+                  median=median(first_diff_multi, na.rm = T),
+                  .by = treatment)
+
+# histogram
+xmarg_data |> 
+    ggplot(aes(x=first_diff_multi, fill=treatment)) +
+    geom_histogram(alpha=.3) +
+    geom_vline(data=stat, aes(xintercept = mean, color=treatment)) +
+    geom_vline(data=stat, aes(xintercept = median, color=treatment), linetype="dotted") +
+  theme_minimal()
+
+# boxplot
+xmarg_data |> 
+  ggbetweenstats(
+  x = treatment,
+  y = first_diff_multi,
+  type = "np",
+  results.subtitle = F,
+  xlab = "# of 'appeal' disaster per year",
+  ylab = "First difference (t - t-1)",
+  title = "Comparison of changes in active multilateral donors",
+  subtitle = "Recipient country-year level")
+
+# table
+xmarg_data |> 
+  tbl_summary(
+  by = treatment,
+  include = first_diff_multi,
+  label = list(first_diff_multi = "Multilateral donors")
+) |> 
+  add_p()
+```
+
+> No difference
+
+#### Bilaterals
+
+```{r}
+# stats
+stat <- summarize(xmarg_data,
+                  mean=mean(first_diff_bilat, na.rm = T),
+                  median=median(first_diff_bilat, na.rm = T),
+                  .by = treatment)
+
+# histogram
+xmarg_data |> 
+    ggplot(aes(x=first_diff_bilat, fill=treatment)) +
+    geom_histogram(alpha=.3) +
+    geom_vline(data=stat, aes(xintercept = mean, color=treatment)) +
+    geom_vline(data=stat, aes(xintercept = median, color=treatment), linetype="dotted") +
+  theme_minimal()
+
+# boxplot
+xmarg_data |> 
+  ggbetweenstats(
+  x = treatment,
+  y = first_diff_bilat,
+  type = "np",
+  results.subtitle = F,
+  xlab = "# of 'appeal' disaster per year",
+  ylab = "First difference (t - t-1)",
+  title = "Comparison of changes in active bilateral donors",
+  subtitle = "Recipient country-year level")
+
+# table
+xmarg_data |> 
+  tbl_summary(
+  by = treatment,
+  include = first_diff_bilat,
+  label = list(first_diff_bilat = "Bilateral donors")
+) |> 
+  add_p()
+```
+
+> No significant difference
 
 ### Sectors
 
@@ -892,7 +415,6 @@ stat <- summarize(xmarg_data,
 
 # histogram
 xmarg_data |> 
-  slice_min(first_diff_sector, prop = .9) |>
     ggplot(aes(x=first_diff_sector, fill=treatment)) +
     geom_histogram(alpha=.3) +
     geom_vline(data=stat, aes(xintercept = mean, color=treatment)) +
@@ -901,16 +423,24 @@ xmarg_data |>
 
 # boxplot
 xmarg_data |> 
-  slice_min(first_diff_sector, prop = .9) |> 
   ggbetweenstats(
   x = treatment,
   y = first_diff_sector,
   type = "np",
   results.subtitle = F,
-  xlab = "Disaster year (=1)",
+  xlab = "# of 'appeal' disaster per year",
   ylab = "First difference (t - t-1)",
-  title = "Comparison of changes in active sectors between disaster and non-disaster years."
-)
+  title = "Comparison of changes in active sectors",
+  subtitle = "Recipient country-year level")
+
+# table
+xmarg_data |> 
+  tbl_summary(
+  by = treatment,
+  include = first_diff_sector,
+  label = list(first_diff_sector = "Sectors")
+) |> 
+  add_p()
 ```
 
 > No significant difference.
@@ -919,9 +449,10 @@ xmarg_data |>
 
 ```{r}
 channel_data <- copy(recipient_data)
-channel_data <- channel_data[, .(recipient_code, year, treatment = switching_appeal_dummy,
+channel_data <- channel_data[, .(recipient_code, year, treatment = appeal_n,
                                  disbursement, channel_nonstate, channel_nonstate_ngo, 
                                  channel_nonstate_multi)
+][, treatment := as_factor(treatment)
 ][, .( # share of disbursements through non-state (total, multi, ngo) channels
   nonstate_pct=100*sum(disbursement[channel_nonstate==1], na.rm=T)/sum(disbursement, na.rm=T),
   multi_pct=100*sum(disbursement[channel_nonstate_multi==1], na.rm=T)/sum(disbursement, na.rm=T),
@@ -951,7 +482,6 @@ stat <- summarize(channel_data,
 
 # histogram
 channel_data |> 
-  slice_min(first_diff_nonstate, prop = .9) |>
     ggplot(aes(x=first_diff_nonstate, fill=treatment)) +
     geom_histogram(alpha=.3) +
     geom_vline(data=stat, aes(xintercept = mean, color=treatment)) +
@@ -960,16 +490,24 @@ channel_data |>
 
 # boxplot
 channel_data |> 
-  slice_min(first_diff_nonstate, prop = .9) |> 
   ggbetweenstats(
   x = treatment,
   y = first_diff_nonstate,
   type = "np",
   results.subtitle = F,
-  xlab = "Disaster year (=1)",
-  ylab = "First difference (t - t-1)",
-  title = "Comparison of changes between disaster and non-disaster years\nin the share of disbursements going through non-State channels of delivery."
-)
+  xlab = "# of 'appeal' disaster per year",
+  ylab = "First difference (% pts)",
+  title = "Comparison of changes in the share of disbursements going through non-State channels of delivery",
+  subtitle = "Recipient country-year level")
+
+# table
+channel_data |> 
+  tbl_summary(
+  by = treatment,
+  include = first_diff_nonstate,
+  label = list(first_diff_nonstate = "Non-State channels")
+) |> 
+  add_p()
 ```
 
 > No significant change
@@ -985,7 +523,6 @@ stat <- summarize(channel_data,
 
 # histogram
 channel_data |> 
-  slice_min(first_diff_multi, prop = .9) |>
     ggplot(aes(x=first_diff_multi, fill=treatment)) +
     geom_histogram(alpha=.3) +
     geom_vline(data=stat, aes(xintercept = mean, color=treatment)) +
@@ -994,17 +531,26 @@ channel_data |>
 
 # boxplot
 channel_data |> 
-  slice_min(first_diff_multi, prop = .9) |> 
   ggbetweenstats(
   x = treatment,
   y = first_diff_multi,
   type = "np",
   results.subtitle = F,
-  xlab = "Disaster year (=1)",
-  ylab = "First difference (t - t-1)",
-  title = "Comparison of changes between disaster and non-disaster years\nin the share of disbursements going through multilateral channels of delivery."
-)
+  xlab = "# of 'appeal' disaster per year",
+  ylab = "First difference (% pts)",
+  title = "Comparison of changes in the share of disbursements\ngoing through Multilateral channels of delivery",
+  subtitle = "Recipient country-year level")
+
+# table
+channel_data |> 
+  tbl_summary(
+  by = treatment,
+  include = first_diff_multi,
+  label = list(first_diff_multi = "Multilateral channels")
+) |> 
+  add_p()
 ```
+
 > No significant change
 
 ### NGOs
@@ -1018,7 +564,6 @@ stat <- summarize(channel_data,
 
 # histogram
 channel_data |> 
-  slice_min(first_diff_ngo, prop = .9) |>
     ggplot(aes(x=first_diff_ngo, fill=treatment)) +
     geom_histogram(alpha=.3) +
     geom_vline(data=stat, aes(xintercept = mean, color=treatment)) +
@@ -1027,365 +572,86 @@ channel_data |>
 
 # boxplot
 channel_data |> 
-  slice_min(first_diff_ngo, prop = .9) |> 
   ggbetweenstats(
   x = treatment,
   y = first_diff_ngo,
   type = "np",
   results.subtitle = F,
-  xlab = "Disaster year (=1)",
-  ylab = "First difference (t - t-1)",
-  title = "Comparison of changes between disaster and non-disaster years\nin the share of disbursements going through multilateral channels of delivery."
-)
-```
+  xlab = "# of 'appeal' disaster per year",
+  ylab = "First difference (% points)",
+  title = "Comparison of changes in the share of disbursements\ngoing through NGO channels of delivery",
+  subtitle = "Recipient country-year level")
 
-> No significant change
-
-# Recipient-Sector level
-
-# Provider-Recipient level
-
-# Recipient-Provider-Sector level
-
-
-
-
-
-
-
-
-----
-
-## Function
-
-```{r}
-# function
-set_data_finance <- function(col_n, col_dummy){
-  
-  setDT(data)
-
-  dt <- data[!is.na(disbursement) # remove obs out of the 'universe'
-  ][, never_treated := sum(get(col_n), na.rm = TRUE), by = recipient_name
-  ][never_treated != 0
-  ][, treatment := ifelse(get(col_dummy) == 0, "No", "Yes")
-  ][, .(
-      commitment_mean = mean(commitment, na.rm = TRUE),
-      disbursement_mean = mean(disbursement, na.rm = TRUE)
-  ), by = .(recipient_name, treatment)
-  ][order(recipient_name)] 
-    
-  return(dt)
-}
-```
-
-## Data
-
-```{r}
-finance_single <- set_data_finance('appeal_n', 'never_treated_appeal')
-finance_switch <- set_data_finance('appeal_n', 'appeal_dummy')
-```
-
-### Cleveland plot
-
-```{r}
-cleveland_plot_data <- function(data){
-  
-  setDT(data)
-
-  data |> 
-    pivot_wider(id_cols = -disbursement_mean, 
-                names_from = treatment, values_from = commitment_mean) |> 
-    mutate(recipient_name = fct_reorder(recipient_name, No)) |> 
-    ggplot() +
-    geom_segment(aes(x=recipient_name, xend=recipient_name, y=No, yend=Yes), 
-                 color="grey40") +
-    geom_point( aes(x=recipient_name, y=No), color="darkgrey", size=3 ) +
-    geom_point( aes(x=recipient_name, y=Yes), color="orange", size=3 ) +
-    coord_flip()+
-    xlab("") +
-    ylab("Avg. yearly commitment, MUSD") +
-    theme_light() +
-    theme(plot.subtitle = element_markdown())
-
-}
-```
-
-```{r}
-cleveland_plot_data(finance_single) + 
-  labs(title = "Single treatment", 
-       subtitle = "<span style = 'color: orange;'>Orange</span> = Treated")
-cleveland_plot_data(finance_switch) + 
-  labs(title = "Switching treatment", 
-       subtitle = "<span style = 'color: orange;'>Orange</span> = Treated")
-```
-
-### Boxplot
-
-```{r}
-boxplot_data <- function(data){
-  ggplot(data,
-       aes(x=treatment, y=disbursement_mean)) +
-  geom_boxplot(fill = c("darkgrey", "orange")) +
-  theme_light() +
-  labs(y="Avg. yearly disbursement, MUSD")
-}
-```
-
-```{r}
-boxplot_data(finance_single) + labs(title = "Single treatment")
-boxplot_data(finance_switch) + labs(title = "Switching treatment")
-```
-
-### Desc. stat.
-
-```{r}
-# compare two groups (non-parametric test)
-tab_summary_data <- function(data){
-  
-  data |> 
-  rename(`Commitment, MUSD (avg)` = commitment_mean,
-         `Disbursements, MUSD (avg)` = disbursement_mean) |> 
+# table
+channel_data |> 
   tbl_summary(
-    by=treatment,
-    include = -recipient_name,
-    type = list(
-      `Commitment, MUSD (avg)` ~ "continuous",
-      `Disbursements, MUSD (avg)` ~ "continuous")
-  ) |> 
-  add_p(test = list(
-    all_continuous() ~ "paired.wilcox.test"),
-    group = recipient_name)
-}
+  by = treatment,
+  include = first_diff_ngo,
+  label = list(first_diff_ngo = "NGO channels")
+) |> 
+  add_p()
 ```
 
+> Weak difference (not statistically significant)
+
+# Donor-Recipient level
+
+**/!\\ PROBLEM: TOO MANY ZEROES**
+
 ```{r}
-tab_summary_data(finance_single)
-tab_summary_data(finance_switch)
+donor_recipient_data <- copy(data_appeal)
 ```
 
-> Conclusion: no significant difference between treated and not treated observations in mean commitment/disbursement. However, it is possible that the increase in external finance only occurs during the following years.
+## Intensive margin
 
-## Channel of delivery
+### Disbursements
 
 ```{r}
-# function data
-channel_data <- function(dummy, channel){
-  
-channel <- data[, variety_code := paste(donor_code, sector_code, sep = "_"),
-                    by = recipient_name
-  ][, never_treated := sum(appeal_n, na.rm = TRUE), by = recipient_name
-  ][never_treated != 0
-  ][, treatment := ifelse(get(dummy) == 0, "Not Treated", "Treated")
-  ][, donor := sum(disbursement[get(channel)==1], na.rm = T)/
-              sum(disbursement, na.rm = T), 
-    by = .(recipient_name, donor_name, year, treatment)
-  ][, sector := sum(disbursement[get(channel)==1], na.rm = T)/
-              sum(disbursement, na.rm = T), 
-    by = .(recipient_name, sector_name, year, treatment)
-  ][, variety := sum(disbursement[get(channel)==1], na.rm = T)/
-              sum(disbursement, na.rm = T), 
-    by = .(recipient_name, variety_code, year, treatment)
-  ][, .(
-    donor_mean = mean(donor, na.rm = T),
-    donor_med = median(donor, na.rm = T),
-    sector_mean = mean(sector, na.rm = T),
-    sector_med = median(sector, na.rm = T),
-    variety_mean = mean(variety, na.rm = T),
-    variety_med = median(variety, na.rm = T)
-  ), by = .(recipient_name, treatment)
-  ][order(recipient_name)
-  ]
-  
-return(channel)
-  
-}
+imarg_disb_data <- copy(donor_recipient_data)
+imarg_disb_data <- imarg_disb_data[, .(donor_code, recipient_code, year, disbursement, treatment = appeal_n)
+][, treatment := as_factor(treatment)
+][, .(
+  disb = sum(disbursement, na.rm = T)
+), by = .(donor_code, recipient_code, year, treatment)
+][, disb_lag1 := shift(disb, type = "lag"), by = recipient_code
+][, first_diff := disb - disb_lag1]
 
-test <- channel_data('appeal_dummy', 'channel_nonstate')
-
-# function table
-table_sum <- function(data){
-  
-  table <- test |> 
-  tbl_summary(
-    by=treatment,
-    include = -recipient_name
-      ) |> 
-  add_p(test = list(
-    all_continuous() ~ "paired.wilcox.test"),
-    group = recipient_name)
-  
-  return(table)
-}
+head(imarg_disb_data)
 ```
 
-> On average, no significant change in the choice between State or non-State channels of delivery between years with and without disasters.
-
-## Function
+### Commitments
 
 ```{r}
-# function
-set_data_channel <- function(col_n, col_dummy){
-  
-  setDT(data)
 
-  dt <- data[!is.na(disbursement) # remove obs out of the 'universe'
-  ][, never_treated := sum(get(col_n), na.rm = TRUE), 
-    by = .(recipient_code, recipient_name)
-  ][never_treated != 0
-  ][, treatment := ifelse(get(col_dummy) == 0, "No", "Yes")
-  ][, .(
-    channel_nonstate_mean = mean(channel_nonstate, na.rm = T),
-    channel_nonstate_ngo_mean = mean(channel_nonstate_ngo, na.rm = T),
-    channel_nonstate_multi_mean = mean(channel_nonstate_multi, na.rm = T),
-    channel_nonstate_private_mean = mean(channel_nonstate_private, na.rm = T)
-    ),
-    by = .(recipient_name, treatment)
-  ][order(recipient_name)]
-
-   return(dt)
-}
 ```
 
-## Data
+## Extensive margin (sector)
 
 ```{r}
-channel_single <- set_data_channel('appeal_n', 'never_treated_appeal')
-channel_switch <- set_data_channel('appeal_n', 'appeal_dummy')
-```
+xmarg_data <- copy(donor_recipient_data)
+xmarg_data <- xmarg_data[, .(donor_code, recipient_code, year, 
+                             sector_code, disbursement, 
+                             treatment = appeal_n,
+                             bi_multi)
+][, treatment := as_factor(treatment)
+][, .(
+  nb_donor = uniqueN(donor_code[disbursement > 0]),
+  nb_multi = uniqueN(donor_code[disbursement > 0 & bi_multi=="Multilateral"]),
+  nb_bilat = uniqueN(donor_code[disbursement > 0 & bi_multi=="Bilateral"]),
+  nb_sector = uniqueN(sector_code[disbursement > 0])
+), by = .(donor_code, recipient_code, year, treatment)
+][, `:=` (
+  nb_donor_lag1 = shift(nb_donor, type = "lag"),
+  nb_multi_lag1 = shift(nb_multi, type = "lag"),
+  nb_bilat_lag1 = shift(nb_bilat, type = "lag"),
+  nb_sector_lag1 = shift(nb_sector, type = "lag")
+), by = .(donor_code, recipient_code)
+][, `:=` (
+  first_diff_donor = nb_donor - nb_donor_lag1,
+  first_diff_multi = nb_multi - nb_multi_lag1,
+  first_diff_bilat = nb_bilat - nb_bilat_lag1,
+  first_diff_sector = nb_sector - nb_sector_lag1
+)]
 
-### Cleveland plot
-
-```{r}
-# nonState
-channel |> 
-  pivot_wider(id_cols = recipient_name, 
-              names_from = appeal, values_from = channel_nonstate_mean) |> 
-  mutate(recipient_name = fct_reorder(recipient_name, No)) |> 
-  ggplot() +
-  geom_segment(aes(x=recipient_name, xend=recipient_name, y=No, yend=Yes), 
-               color="grey40") +
-  geom_point( aes(x=recipient_name, y=No), color="darkgrey", size=3 ) +
-  geom_point( aes(x=recipient_name, y=Yes), color="orange", size=3 ) +
-  coord_flip()+
-  xlab("") +
-  ylab("Avg. share of nonState bypass") +
-  theme_light()
-
-# nonState NGO
-channel |> 
-  pivot_wider(id_cols = recipient_name, 
-              names_from = appeal, values_from = channel_nonstate_ngo_mean) |> 
-  mutate(recipient_name = fct_reorder(recipient_name, No)) |> 
-  ggplot() +
-  geom_segment(aes(x=recipient_name, xend=recipient_name, y=No, yend=Yes), 
-               color="grey40") +
-  geom_point( aes(x=recipient_name, y=No), color="darkgrey", size=3 ) +
-  geom_point( aes(x=recipient_name, y=Yes), color="orange", size=3 ) +
-  coord_flip()+
-  xlab("") +
-  ylab("Avg. share of nonState NGO bypass") +
-  theme_light()
-
-# nonState Other
-channel |> 
-  pivot_wider(id_cols = recipient_name, 
-              names_from = appeal, values_from = channel_nonstate_other_mean) |> 
-  mutate(recipient_name = fct_reorder(recipient_name, No)) |> 
-  ggplot() +
-  geom_segment(aes(x=recipient_name, xend=recipient_name, y=No, yend=Yes), 
-               color="grey40") +
-  geom_point( aes(x=recipient_name, y=No), color="darkgrey", size=3 ) +
-  geom_point( aes(x=recipient_name, y=Yes), color="orange", size=3 ) +
-  coord_flip()+
-  xlab("") +
-  ylab("Avg. share of nonState nonNGO bypass") +
-  theme_light()
-```
-
-### Boxplot
-
-```{r}
-channel_single |> 
-  pivot_longer(cols = starts_with("channel"), 
-               names_to = "channel", values_to = "share") |> 
-  ggplot(aes(x=treatment, y=share, fill=channel)) +
-  geom_boxplot() +
-  theme_light() +
-  labs(x="Disaster year leading to intern. assistance appeal", 
-       y="Share (%)")
-```
-
-### Desc. stat.
-
-```{r}
-# Compare two groups
-channel |> 
-  tbl_summary(
-    by=appeal,
-    include = -recipient_name,
-    type = list(
-      channel_nonstate_mean ~ "continuous",
-      channel_nonstate_ngo_mean ~ "continuous",
-      channel_nonstate_other_mean ~ "continuous")
-  ) |> 
-  add_p(test = list(
-    all_continuous() ~ "paired.wilcox.test"),
-    group = recipient_name)
-
-# compare two groups (non-parametric test)
-channel  %>%
-  wilcox_test(channel_nonstate_mean ~ appeal, paired = TRUE) |> 
-  add_significance()
-
-channel  %>%
-  wilcox_test(channel_nonstate_ngo_mean ~ appeal, paired = TRUE) |> 
-  add_significance()
-
-channel  %>%
-  wilcox_test(channel_nonstate_other_mean ~ appeal, paired = TRUE) |> 
-  add_significance()
-
-# effect size
-channel |> 
-  rstatix::wilcox_effsize(channel_nonstate_mean ~ appeal,
-                          paired = TRUE)
-channel |> 
-  rstatix::wilcox_effsize(channel_nonstate_ngo_mean ~ appeal,
-                          paired = TRUE)
-
-channel |> 
-  rstatix::wilcox_effsize(channel_nonstate_other_mean ~ appeal,
-                          paired = TRUE)
-```
-
-## Number of donors
-
-```{r}
-donor <- assignment |>
-  filter(!is.na(disbursement)) |> 
-  filter(sum(appeal_n, na.rm = T) != 0, .by = c(recipient_code, recipient_name)) |> 
-  rename(appeal = appeal_n) |> 
-  mutate(appeal = if_else(appeal != 0, "Yes", "No")) |>
-  mutate(n_donor = n_distinct(donor_code), .by = c(recipient_code, recipient_name, year)) |> 
-  summarize(
-    n_donor_mean = mean(n_donor, na.rm = T),
-    n_donor_median = median(n_donor, na.rm = T),
-    .by = c(recipient_name, appeal)
-  )
-```
-
-```{r}
-donor |> 
-  pivot_wider(id_cols = recipient_name,
-              names_from = appeal, values_from = n_donor_median) |> 
-  arrange(desc(Yes)) |> 
-  mutate(recipient_name = fct_reorder(as.factor(recipient_name), No)) |> 
-  ggplot() +
-  geom_segment( aes(x=recipient_name, xend=recipient_name, y=No, yend=Yes), color="grey") +
-  geom_point( aes(x=recipient_name, y=No), color="darkgrey", size=3 ) +
-  geom_point( aes(x=recipient_name, y=Yes), color="orange", size=3 ) +
-  coord_flip()+
-  xlab("") +
-  ylab("Number of donors") +
-  theme_light()
+head(xmarg_data)
 ```
