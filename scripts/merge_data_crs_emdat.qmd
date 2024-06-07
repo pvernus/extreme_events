@@ -9,8 +9,8 @@ bibliography: references.bib
 
 source(here::here('scripts', 'library.R'))
 
-load(here('data', 'delivery_channel_crs_analysis.RData'))
-load(here('data', 'em_dat_events.RData'))
+load(here('data', 'data_oecd_crs_clean.RData'))
+load(here('data', 'data_emdat_clean.RData'))
 ```
 
 # Estimand
@@ -20,7 +20,7 @@ load(here('data', 'em_dat_events.RData'))
 First, we create unique identifiers for donors, recipients, donor-recipient dyads, and donor-recipient-year tryads. The latter has the following format: XXXX_XXXX_XXXX (`donor_coderecipient_codeyear`).
 
 ```{r}
-data_disaster <- data_delivery |> 
+data_disaster <- data_clean |> 
   mutate(
     id_donor = sprintf("%04d", donor_code),
     id_recipient = sprintf("%04d", recipient_code)
@@ -69,7 +69,6 @@ target_pop_period <- data_disaster |>
   expand(year, nesting(donor_code, donor_name), nesting(recipient_code, recipient_name), nesting(sector_code, sector_name))
 ```
 
-
 -   Create two data sets, `cohort_donor_year` and `cohort_recipient_year`, with the list of donors/recipients and their respective year of cohort (i.e. the minimum for which we have an observation in our full sample);
 
 ```{r}
@@ -100,7 +99,6 @@ target_pop_period_cohort <- left_join(target_pop_period, cohort_donor_year,
                                             by = c("donor_code", "donor_name")) |>
   left_join(cohort_recipient_year, by = c("recipient_code", "recipient_name"))
 ```
-
 
 -   Create a dummy variable `dummy_universe` that takes the value 1 when at least one observation has been observed for both donor and recipient during or before the current year.
 
@@ -163,7 +161,7 @@ data_disaster |>
 
 ```{r}
 # remove unncessary objects
-rm(data, data_clean, data_delivery, target_pop_period_cohort_donor, target_pop_period_cohort, target_pop_period)
+rm(target_pop_period_cohort, target_pop_period)
 ```
 
 ## Unit-specific quantity
@@ -228,9 +226,7 @@ estimand |>
   vis_miss()
 ```
 
-Note: as explained above, some missing data is due to non-existing actors at year t, while other missing data is due to existing actors but with no aid flow at year t. The former should be considered as NAs and the latter as zeroes.
-
-Consequently, we replace NAs by 0 conditioning on `dummy_universe` == 1.
+> Note: as explained above, some missing data is due to non-existing actors at year t, while other missing data is due to existing actors but with no aid flow at year t. The former should be considered as NAs and the latter as zeroes. Consequently, we replace NAs by 0 conditioning on `dummy_universe` == 1.
 
 ```{r}
 estimand <- estimand |> 
@@ -248,15 +244,16 @@ estimand |>
 We include dummy variables to account for the extensive margin.
 
 ```{r}
-estimand <- estimand[, `:=` (
+estimand <- estimand |> 
+  mutate(
   commit_xmarg = ifelse(commitment == 0 | is.na(commitment), 0, 1),
   disb_xmarg = ifelse(disbursement == 0 | is.na(disbursement), 0, 1)  
-)]
+)
 
 head(estimand)
 ```
 
-Note: alternative for the definition of the unit of observation, see [@yotovAdvancedGuideTrade2016], p.23: adjustment to treatment, data pooled over consecutive years vs. 3/5-year intervals.
+> Note: for an alternative in the definition of the unit of observation, see [@yotovAdvancedGuideTrade2016], p.23: adjustment to treatment, data pooled over consecutive years vs. 3/5-year intervals.
 
 # Mediator (channel of delivery)
 
@@ -266,10 +263,11 @@ Note: alternative for the definition of the unit of observation, see [@yotovAdva
 
 ```{r}
 # two-way frequency table
-table(data_disaster$channel_bypass, data_disaster$channel_bypass_ngo)
-table(data_disaster$channel_bypass, data_disaster$channel_bypass_multi)
-table(data_disaster$channel_bypass, data_disaster$channel_bypass_private)
+table(data_disaster$channel_nonstate, data_disaster$channel_nonstate_ngo)
+table(data_disaster$channel_nonstate, data_disaster$channel_nonstate_multi)
+table(data_disaster$channel_nonstate, data_disaster$channel_nonstate_private)
 ```
+
 -   \% non State vs. State channels;
 -   \% non State & NGO vs. Other non State channels;
 -   \% non State & Multi vs. Other non State channels;
@@ -279,13 +277,13 @@ table(data_disaster$channel_bypass, data_disaster$channel_bypass_private)
 # create new channel-related vars: share of commitments going through nonstate, (nonstate) ngo, and other nonstate actors
 mediator_dyad_sector_year <- copy(data_disaster)
 mediator_dyad_sector_year <- mediator_dyad_sector_year[, .(
-  sh_nonstate = sum(usd_commitment_defl[channel_bypass_ngo != "No"], na.rm = T) / 
+  sh_nonstate = sum(usd_commitment_defl[channel_nonstate_ngo != "No"], na.rm = T) / 
     sum(usd_commitment_defl, na.rm = T),
-  sh_nonstate_ngo = sum(usd_commitment_defl[channel_bypass_ngo == "Yes (NGO)"], na.rm = T) /
+  sh_nonstate_ngo = sum(usd_commitment_defl[channel_nonstate_ngo == "Yes (NGO)"], na.rm = T) /
     sum(usd_commitment_defl, na.rm = T),
-  sh_nonstate_multi = sum(usd_commitment_defl[channel_bypass_multi == "Yes (Multi)"], na.rm = T) /
+  sh_nonstate_multi = sum(usd_commitment_defl[channel_nonstate_multi == "Yes (Multi)"], na.rm = T) /
     sum(usd_commitment_defl, na.rm = T),
-  sh_nonstate_private = sum(usd_commitment_defl[channel_bypass_private == "Yes (Private)"], na.rm = T) /
+  sh_nonstate_private = sum(usd_commitment_defl[channel_nonstate_private == "Yes (Private)"], na.rm = T) /
     sum(usd_commitment_defl, na.rm = T)
   ),
   by = .(donor_code, donor_name, recipient_code, recipient_name, sector_code, sector_name, year)]
@@ -302,8 +300,8 @@ sample_n(mediator_dyad_sector_year, 5)
 ```{r}
 summary(mediator_dyad_sector_year[, 8:11])
 ```
-> Note (1): Most channel vars are either 0 or 1. Dummy var instead of percentage var seems more relevant for the analysis.
-> Note (2): missing data are due to observations with commitments valued as '0'.
+
+> Note (1): Most channel vars are either 0 or 1. Dummy var instead of percentage var seems more relevant for the analysis. Note (2): missing data are due to observations with commitments valued as '0'.
 
 -   Replace NAs by zeroes in delivery channel variables.
 
@@ -362,6 +360,7 @@ sample_n(mediator, 5)
 summary(mediator[, 8:11])
 
 ```
+
 -   Merge `mediator` (channels of delivery) and `estimand` (aid flows).
 
 ```{r}
@@ -653,6 +652,16 @@ distinct(data_disaster, recipient_name)
 distinct(assignment, recipient_name)
 ```
 
+```{r}
+assignment_universe <- copy(assignment)
+assignment_universe <- assignment_universe[dummy_universe == 1] # rm obs where one of the actor where not registered in the crs data base at/before year t
+```
+
+```{r}
+save(assignment_universe, file = here("data", "assignment.RData"))
+```
+
+
 ## Plot
 
 ### Univariate distributions
@@ -748,31 +757,4 @@ pheatmap::pheatmap(plot_treat_binary |> select(-total),
     cluster_rows = FALSE,
     cluster_cols = FALSE,
     main = "Binary switching 'large' treatment")
-```
-
-```{r}
-assignment_universe <- copy(assignment)
-assignment_universe <- assignment_universe[dummy_universe == 1] # rm obs where one of the actor where not registered in the crs data base at/before year t
-```
-
-
-```{r}
-save(assignment_universe, file = here("data", "assignment.RData"))
-```
-
-
-Related articles
-
-[@reinhardt2024]
-
-[@dellmuth2021]
-
-```{r}
-
-df <- as.data.frame(assignment) 
-panelView::panelview(commitment ~ 1, 
-                     data = df, 
-                     index = c("id","year"), 
-                     xlab = "Year", ylab = "Dyads",
-                     type = "missing")
 ```

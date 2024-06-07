@@ -1,35 +1,31 @@
 ---
-title: "Differences between No-/Appeal years"
+title: "Data analysis"
 format: html
 editor: visual
 ---
 
-```{r}
+```{r load_packages}
+source(here::here('scripts', 'library.R'))
+```
+
+-   Unit-level observation: `recipient`-`donor`-`year`-`sector`.
+
+```{=html}
+<!-- -->
+```
+-   Restrict observations to actors in a dyad both registered (active) in the CRS data set at year t.
+
+```{r load_data}
+# load(here('data', 'data_oecd_crs_clean.RData'))
+# load(here('data', 'data_emdat_clean.RData'))
 load(here("data", "assignment.RData"))
-
-load(here('data', 'delivery_channel_crs_analysis.RData'))
-load(here('data', 'em_dat_events.RData'))
 ```
-
-```{r}
-if (!require("pacman")) install.packages("pacman")
-pacman::p_load(
-  tidyverse,
-  rstatix,
-  ggpubr
-  )
-```
-
--   We focus on disasters which led to a \*call for international assistance\*\* (proxy for the most extreme events). We'll call such events "appeal disasters".
--   We restrict the data to pairs of actors both registered in the CRS data set at year t.
--   we remove countries that have not experienced any appeal disaster over the period 2002-2022.
 
 ```{r}
 # data
-data_appeal <- copy(assignment_universe)
-data_appeal <- data_appeal[, never_treated := sum(appeal_n, na.rm = TRUE),
-                                   by = recipient_name
-][never_treated != 0]
+data <- copy(assignment_universe)
+
+# data_appeal <- data_appeal[, never_treated := sum(appeal_n, na.rm = TRUE), by = recipient_name][never_treated != 0]
 ```
 
 ```{r}
@@ -46,6 +42,126 @@ recipient_chars <- unique(data_delivery[, .(
 data_appeal <- merge(data_appeal, donor_chars, by="donor_code")
 data_appeal <- merge(data_appeal, recipient_chars, by="recipient_code")
 ```
+
+# Single-treatment only
+
+-   Treatment status
+
+```{r single_treated_recipient_data}
+
+# select vars of interest
+data_binary_treatment <- data[, .(recipient_name, year, treat_all = switching_event_dummy, treat_appeal = switching_appeal_dummy)]
+
+# keep unique obs
+data_binary_treatment.unique <- unique(data_binary_treatment)
+
+# convert event dummy from factor to numeric
+data_binary_treatment.unique$treat_all <- as.numeric(levels(data_binary_treatment.unique$treat_all))[data_binary_treatment.unique$treat_all] # all types of events
+
+data_binary_treatment.unique$treat_appeal <- as.numeric(levels(data_binary_treatment.unique$treat_appeal))[data_binary_treatment.unique$treat_appeal] # only "appeal" events
+
+# plot treatment status
+panelView::panelview(1 ~ treat_all, # all event types
+          data = data_binary_treatment.unique, index = c("recipient_name","year"), 
+          xlab = "Year", ylab = "Country",
+          legend.labs = c("Control Recipients", 
+                          "Treated Recipients", 
+                          "Missing"),
+          main = "Treatment Status: All events",
+          by.timing = TRUE,
+          collapse.history = "TRUE")
+# "appeal" events - binary
+panelView::panelview(1 ~ treat_appeal, # 'appeal' event type only
+          data = data_binary_treatment.unique, index = c("recipient_name","year"), 
+          xlab = "Year", ylab = "Number of Countries",
+          legend.labs = c("Control Recipients", 
+                          "Treated Recipients", 
+                          "Missing"),
+          main = "Treatment Status: Events w/ call for international assistance",
+          by.timing = TRUE,
+          collapse.history = "TRUE")
+
+```
+
+-   Remove recipient countries with more than one treatment period (i.e. only keep countries with no or one treatment period).
+
+```{r}
+
+# sum number of treated years by recipient
+data_all.treated_year_N <- data_binary_treatment.unique[, .( # all
+  treated_year_N = sum(treat_all, na.rm = T)
+), by = recipient_name
+][order(-treated_year_N)]
+
+data_appeal.treated_year_N <- data_binary_treatment.unique[, .( # appeal only
+  treated_year_N = sum(treat_appeal, na.rm = T)
+), by = recipient_name
+][order(-treated_year_N)]
+
+# remove recipients w/ more than one treated year
+data_all.treated_year_N[treated_year_N > 1, ] # all 
+data_appeal.treated_year_N[treated_year_N > 1, ] # appeal only
+
+# create object with names of the recipients w/ more than one treated year
+data_all.multi_treated_recipients <- data_all.treated_year_N[treated_year_N > 1, recipient_name] # all
+data_appeal.multi_treated_recipients <- data_appeal.treated_year_N[treated_year_N > 1, recipient_name] # appeal only
+
+# remove recipients w/ more than one treated year
+data.single_treated_all <- data[!recipient_name %in% data_all.multi_treated_recipients, ] # all
+data.single_treated_appeal <- data[!recipient_name %in% data_appeal.multi_treated_recipients, ] # appeal only
+
+# list single treated recipients
+unique(data.single_treated_all$recipient_name) # all
+unique(data.single_treated_appeal$recipient_name) # appeal only
+```
+
+-   create new `period` variable: year - year\[treatment==1\], by = recipient
+
+```{r}
+
+# select relevant vars
+between_periods_comparison <- single_treated_recipient_data[, .(
+  recipient_code, recipient_name,
+  year,
+  commitment, disbursement,
+  treatment = switching_appeal_dummy
+)
+# sum(marize) finance flows by recipient and year
+][, .(
+  commit = sum(commitment, na.rm = T),
+  disb = sum(disbursement, na.rm = T)
+), by = .(recipient_code, recipient_name, year, treatment)
+# create new var `period` 
+][, period := year - year[treatment==1], by = .(recipient_code, recipient_name)
+# order observations by recipient and year
+][order(recipient_code, year), 
+# create new var `lag1`
+][, lag1 := shift(commit, type = "lag"), by = .(recipient_code, recipient_name)
+# create new var `diff`
+][, diff := commit - lag1
+]
+  
+head(between_periods_comparison)
+
+data <- between_periods_comparison[period %in% c(-2:2)]
+
+ggplot(aes(x = period, y = diff)) +
+  geom_boxplot()
+
+ggbetweenstats(
+  data = data, 
+  x = period,
+  y = diff,
+  type = "np"
+)
+
+
+data_delivery[recipient_name=="Philippines", .(year, recipient_name)][order(year), ][]
+```
+
+-   new variables lag1
+-   new variables diff year - lag1
+-   plot
 
 # Recipient level
 
@@ -655,3 +771,5 @@ xmarg_data <- xmarg_data[, .(donor_code, recipient_code, year,
 
 head(xmarg_data)
 ```
+
+------------------------------------------------------------------------

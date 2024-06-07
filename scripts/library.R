@@ -33,11 +33,14 @@ pacman::p_load(
   hexbin,
   data.tree,
   DiagrammeR,
-  jsonlite
+  jsonlite,
+  tidyverse,
+  rstatix,
+  ggpubr
   )
 
-remotes::install_github("frbcesab/riati")
-library("riati")
+# remotes::install_github("frbcesab/riati")
+# library("riati")
 
 
 

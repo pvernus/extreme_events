@@ -6,7 +6,7 @@ editor: visual
 
 ```{r load_pckgs}
 
-source(here::here('scripts', 'library_em_dat.R'))
+source(here::here('scripts', 'library.R'))
 ```
 
 #### EM-DAT Inclusion Criteria **(at least one)**
@@ -20,7 +20,7 @@ source(here::here('scripts', 'library_em_dat.R'))
 ```{r import_raw_data_em_dat}
 
 em_dat <- read_xlsx( # import raw data
-  path = here('data', 'public_emdat_custom_request_2024-04-09_b44a5e9a-5bfb-450b-8e72-ab4a9c42fc72.xlsx'),
+  path = here('source', 'emdat', 'public_emdat_custom_request_2024-04-09_b44a5e9a-5bfb-450b-8e72-ab4a9c42fc72.xlsx'),
   sheet = 1,
   trim_ws = T
   ) |> 
@@ -142,7 +142,7 @@ em_dat |>
   theme_minimal() +
   theme(axis.text.y = element_blank(),
         legend.position = 'bottom') +
-  labs(x='Year', y='', fill="State of emergency | Request for international assistance")
+  labs(x='Year', y='', fill="State of emergency or Request for international assistance")
 ```
 
 -   Among 'large/reported',
@@ -205,182 +205,6 @@ em_dat |>
   labs(x='', y='Number of events over te period 2000-22')
 ```
 
-**When have countries been affected by 'appeal' events?**
-
--   Only a limited number of countries have made appeals after an extreme events.
-
--   Except for Canada, all are low/middle-income countries.
-
 ```{r}
-
-# list of all countries, year, country-year pairs in the EM-DAT database
-country <- distinct(em_dat, country, iso)
-year <- distinct(em_dat, year)
-country_year_sample <- merge(country, year) |> arrange(year, country)
-
-# Create vars
-# create var for events
-appeal_freq <- em_dat |> 
-  filter(year < 2002) |> 
-  mutate(appeal = if_else(appeal=='Yes', 1, 0)) |> 
-  summarize(
-          events_freq = as.integer(sum(appeal, na.rm = T)),
-          .by = c(country, iso, year)
-          )
-# create var for binary events
-appeal_binary <- em_dat |>
-  arrange(country, year) |> 
-  mutate(events_binary = if_else(events_freq == 0, NA, 1)) |> 
-  group_by(country) |> 
-  fill(events_binary, .direction = "down") |> 
-  replace_na(list(events_binary = 0)) |> 
-  ungroup()
-# create var for cumulative events
-appeal_df <- appeal_binary |> 
-  arrange(country, year) |> 
-  mutate(events_cum = as.integer(cumsum(events_freq)), .by=country)
+save(em_dat, file = here('data', 'data_emdat_clean.RData'))
 ```
-
-```{r appeal_events}
-
-## Merge
-# merge complete country-year pairs with events
-em_dat_appeal <- left_join(country_year_sample, appeal_df[,-1], 
-                   by = c('iso', 'year')) |> 
-  arrange(country, year) |> 
-  group_by(country) |> 
-  mutate(events_freq = replace_na(events_freq, 0)) |> 
-  fill(events_cum, .direction = "down") |> 
-  fill(events_binary, .direction = "down") |> 
-  mutate(events_binary = replace_na(events_binary, 0),
-         events_cum = replace_na(events_cum, 0)) |>
-  ungroup()
-```
-
-```{r all_events}
-
-# Create vars
-# create var for events
-events_df <- em_dat |> 
-  summarize(
-          events = length(dis_no),
-          .by = c(country, iso, year)
-          )
-# create var for cumulative events
-cum_events_df <- events_df |> 
-  arrange(country, year) |> 
-  mutate(cum_events = as.integer(cumsum(events)), .by=country)
-
-## Merge
-# merge complete country-year pairs with events
-merge <- left_join(country_year_sample, events_df, 
-                   by = c('country', 'year')) |> 
-  arrange(country, year) |> 
-  mutate(events = replace_na(events, 0))
-
-# merge complete country-year pairs with cumulative events
-cum_merge <- left_join(country_year_sample, cum_events_df, 
-                   by = c('country', 'year')) |> 
-  arrange(country, year) |> 
-  mutate(cum_events = if_else(
-    year == '2000' & is.na(events), 0, cum_events)) |> 
-    fill(cum_events, .direction = "down")
-
-em_dat_events <-  left_join(country_year_sample, cum_events_df, 
-                   by = c('country', 'year')) |> 
-  arrange(country, year) |> 
-  mutate(
-    cum_events = if_else(year == '2000' & is.na(events), 0, cum_events),
-    events = replace_na(events, 0)) |> 
-    fill(cum_events, .direction = "down")
-```
-
-```{r}
-save(em_dat, file = here('data', 'em_dat_events.RData'))
-```
-
-```{r}
-#| layout-ncol: 2
-#| fig-cap: 
-#|   - "'Appeal' events per year"
-#|   - "Cumulative 'appeal' events over the period"
-
-## Pivote to wider
-# pivot merge to wider
-x <- merge |> 
-  select(country, year, events) |> 
-  pivot_wider(names_from = 'year', values_from = 'events') |> 
-  arrange(desc(`2022`)) |> 
-  rowwise() |> 
-  mutate(total = sum(c_across(`2000`:`2022`))) |> 
-  arrange(desc(total)) |> 
-  column_to_rownames(var="country")
-
-# pivot cum_merge to wider
-cum_x <- cum_merge |> 
-  select(country, year, cum_events) |> 
-  pivot_wider(names_from = 'year', values_from = 'cum_events') |> 
-  column_to_rownames(var="country") |> 
-  arrange(desc(`2022`))
-
-## Heatmap
-# heatmap events
-pheatmap::pheatmap(x |> select(-total) |> slice_head(n=100),
-    color = c('white','orange','red'),
-    legend_breaks = c(0,1,2),
-    cluster_rows = FALSE,
-    cluster_cols = FALSE)
-  
-# heatmap cum_events
-pheatmap::pheatmap(cum_x |> slice_head(n=100),
-    color = c("white", "#FDD49E", "#FDBB84", "#FC8D59", "#EF6548", "#D7301F", "#990000"),
-#    legend_breaks = c(0:7),
-    cluster_rows = FALSE,
-    cluster_cols = FALSE)
-```
-
-```{r all_events}
-
-#| layout-ncol: 2
-#| fig-cap: 
-#|   - "All-type events per year"
-#|   - "Cumulative all-type events over the period"
-
-## Pivote to wider
-# pivot merge to wider
-x <- merge |> 
-  select(country, year, events) |> 
-  pivot_wider(names_from = 'year', values_from = 'events') |> 
-  arrange(desc(`2022`)) |> 
-  rowwise() |> 
-  mutate(total = sum(c_across(`2000`:`2022`))) |> 
-  arrange(desc(total)) |> 
-  column_to_rownames(var="country")
-
-# pivot cum_merge to wider
-cum_x <- cum_merge |> 
-  select(country, year, cum_events) |> 
-  pivot_wider(names_from = 'year', values_from = 'cum_events') |> 
-  column_to_rownames(var="country") |> 
-  arrange(desc(`2022`))
-
-## Heatmap
-# heatmap events
-pheatmap::pheatmap(x |> select(-total),
-    color = c("white", "#FDD49E", "#FDBB84", "#990000"),
-    breaks = c(1, 2, 43),
-    legend_breaks = c(0, 1, 2, 43),
-    cluster_rows = FALSE,
-    cluster_cols = FALSE)
-  
-# heatmap cum_events
-pheatmap::pheatmap(cum_x |> slice_head(n=100),
-    color = c("white", "#FDD49E", "#FDBB84", "#FC8D59", "#EF6548", "#D7301F", "#990000"),
-#    legend_breaks = c(0:7),
-    cluster_rows = FALSE,
-    cluster_cols = FALSE)
-
-seq(min(x |> select(-total)), max(x |> select(-total)), length.out = 10)
-```
-
--   trend per country
