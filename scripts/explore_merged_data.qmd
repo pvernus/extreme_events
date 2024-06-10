@@ -9,10 +9,6 @@ source(here::here('scripts', 'library.R'))
 ```
 
 -   Unit-level observation: `recipient`-`donor`-`year`-`sector`.
-
-```{=html}
-<!-- -->
-```
 -   Restrict observations to actors in a dyad both registered (active) in the CRS data set at year t.
 
 ```{r load_data}

@@ -10,7 +10,7 @@ source(here::here('scripts', 'library.R'))
 
 # Data import
 
-Data is extracted from the oeCD platform as text files. There is one text file per year between 2002 and 2022, except for 2002-03 and 2004-05. There are 19 files in total.
+Data is extracted from the OECD platform as text files. There is one text file per year between 2002 and 2022, except for 2002-03 and 2004-05. There are 19 files in total.
 
 ```{r import_raw_data}
 # create path to folder w/ raw data
@@ -105,7 +105,7 @@ The name of the agency can also be added manually by the provider, but reporting
 #### Table: Example with the Donor Government group category.
 
 | Code  | Level 1                    | Code  | Level 2          | Code  | Level 3                                | Reported name                                                                                                |
-|--------|--------|--------|--------|--------|--------|-------------------------|
+|----------|----------|----------|----------|----------|----------|----------------|
 | 10000 | Public Sector Institutions | 11000 | Donor Government | 11001 | Central Government                     | Ex: Ministry Of Employment And Labor, The U.S Department Of Homeland Security, Miscellaneous Suppliers, etc. |
 |       |                            |       |                  | 11002 | Local Government                       | Ex: Comune Di Reggio Emilia, Local Government, Busan Metropolitan City, etc.                                 |
 |       |                            |       |                  | 11003 | Public corporations                    | Ex: The Export-Import Bank Of Korea, Kfw, Public Corporations, etc.                                          |
@@ -242,11 +242,11 @@ data_channel <- data_channel |>
 
 data_channel <- data_channel |> 
   mutate(
-    channel_nonstate = fct(as.character((if_else(channel_parent_code_2024 %in% c(20000:63000), 1, 0)))),
-    channel_nonstate_ngo = fct(as.character((if_else(channel_parent_code_2024 %in% c(20000:23000), 1, 0)))),
-    channel_nonstate_multi = fct(as.character((if_else(channel_parent_code_2024 %in% c(40000:47000), 1, 0)))),
-    channel_nonstate_private = fct(as.character((if_else(channel_parent_code_2024 %in% c(60000:63000), 1, 0)))),
-    channel_other = fct(as.character((if_else(channel_parent_code_2024 == 90000, 1, 0))))
+    channel_nonstate = if_else(channel_parent_code_2024 %in% c(20000:63000), 1, 0),
+    channel_nonstate_ngo = if_else(channel_parent_code_2024 %in% c(20000:23000), 1, 0),
+    channel_nonstate_multi = if_else(channel_parent_code_2024 %in% c(40000:47000), 1, 0),
+    channel_nonstate_private = if_else(channel_parent_code_2024 %in% c(60000:63000), 1, 0),
+    channel_other = if_else(channel_parent_code_2024 == 90000, 1, 0)
   ) |> 
   relocate(starts_with('channel_bypass'), .after = channel_name_2024)
 
@@ -268,8 +268,7 @@ data_channel <- data_channel |>
 ```
 
 ```{r}
-data_clean <- copy(data_channel)
-save(data_clean, delivery_crs_code, file = here("data", "data_oecd_crs_clean.RData"))
+save(data_channel, delivery_crs_code, file = here("data", "data_oecd_crs_clean.RData"))
 rm(data_channel)
 ```
 
