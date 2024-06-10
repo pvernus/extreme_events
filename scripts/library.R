@@ -12,6 +12,7 @@ pacman::p_load(
   tidyverse,
   fuzzyjoin, # inexact matching
   data.table, # data transformation
+  collapse,
   readxl, # read excel
   labelled, # look_for()
   janitor, # clean_name()

@@ -20,8 +20,8 @@ load(here('data', 'data_emdat_clean.RData'))
 First, we create unique identifiers for donors, recipients, donor-recipient dyads, and donor-recipient-year tryads. The latter has the following format: XXXX_XXXX_XXXX (`donor_coderecipient_codeyear`).
 
 ```{r}
-data_disaster <- data_clean |> 
-  mutate(
+data_disaster <- data_channel |> 
+  fmutate(
     id_donor = sprintf("%04d", donor_code),
     id_recipient = sprintf("%04d", recipient_code)
   )
@@ -100,11 +100,11 @@ target_pop_period_cohort <- left_join(target_pop_period, cohort_donor_year,
   left_join(cohort_recipient_year, by = c("recipient_code", "recipient_name"))
 ```
 
--   Create a dummy variable `dummy_universe` that takes the value 1 when at least one observation has been observed for both donor and recipient during or before the current year.
+-   Create a dummy variable `dummy_universe` that takes the value 1 when at least one observation has been observed for both the donor *and* the recipient during or before the current year.
 
-The idea is to use this dummy to treat missing values. A missing value is considered as '0' when `dummy_universe` equals '1' and as 'NA' when it equals '0'.
+> Note: the idea is to use this dummy to treat missing values. A missing value is considered as '0' when `dummy_universe` equals '1' and as 'NA' when it equals '0'.
 
-> Should dummy_universe be at the donor-recipient-sector level?
+> Question : should dummy_universe be at the donor-recipient-sector level?
 
 ```{r}
 target_pop <- target_pop_period_cohort |> 
@@ -116,6 +116,7 @@ target_pop |>
 ```
 
 ```{r}
+# add id vars
 target_pop <- target_pop |> 
   mutate(
     id_actor = paste(donor_code, recipient_code, sep = "_"),
@@ -128,9 +129,8 @@ setDT(target_pop, key = c("id_actor", "id"))
 head(target_pop)
 ```
 
--   Visualize the unbalanced panel data.
-
 ```{r}
+# Visualize the unbalanced panel data
 # data <- target_pop[, .(id_actor, year, dummy_universe)]
 
 # panelView::panelview(1 ~ dummy_universe,
@@ -145,7 +145,7 @@ head(target_pop)
 #                    )
 ```
 
-Note: most of the variation comes from nonbilateral providers. Filter the full sample to bilateral providers only? However, multilaterals are important actors following disasters.
+> Note: most of the variation comes from nonbilateral providers. Filter the full sample to bilateral providers only? However, multilaterals are important actors following disasters.
 
 ```{r}
 # Year-specific lists
@@ -268,25 +268,22 @@ table(data_disaster$channel_nonstate, data_disaster$channel_nonstate_multi)
 table(data_disaster$channel_nonstate, data_disaster$channel_nonstate_private)
 ```
 
--   \% non State vs. State channels;
--   \% non State & NGO vs. Other non State channels;
--   \% non State & Multi vs. Other non State channels;
--   \% non State & other (non-NGO) vs. Other non State channels.
-
 ```{r}
 # create new channel-related vars: share of commitments going through nonstate, (nonstate) ngo, and other nonstate actors
 mediator_dyad_sector_year <- copy(data_disaster)
-mediator_dyad_sector_year <- mediator_dyad_sector_year[, .(
-  sh_nonstate = sum(usd_commitment_defl[channel_nonstate_ngo != "No"], na.rm = T) / 
-    sum(usd_commitment_defl, na.rm = T),
-  sh_nonstate_ngo = sum(usd_commitment_defl[channel_nonstate_ngo == "Yes (NGO)"], na.rm = T) /
-    sum(usd_commitment_defl, na.rm = T),
-  sh_nonstate_multi = sum(usd_commitment_defl[channel_nonstate_multi == "Yes (Multi)"], na.rm = T) /
-    sum(usd_commitment_defl, na.rm = T),
-  sh_nonstate_private = sum(usd_commitment_defl[channel_nonstate_private == "Yes (Private)"], na.rm = T) /
-    sum(usd_commitment_defl, na.rm = T)
-  ),
-  by = .(donor_code, donor_name, recipient_code, recipient_name, sector_code, sector_name, year)]
+
+mediator_dyad_sector_year <- mediator_dyad_sector_year |> 
+  fsummarize(
+    sh_nonstate = sum(usd_commitment_defl[channel_nonstate==1], na.rm = T)/
+      sum(usd_commitment_defl, na.rm = T),
+    sh_nonstate_ngo = sum(usd_commitment_defl[channel_nonstate_ngo==1], na.rm = T)/
+      sum(usd_commitment_defl, na.rm = T),
+    sh_nonstate_multi = sum(usd_commitment_defl[channel_nonstate_multi==1], na.rm = T)/
+      sum(usd_commitment_defl, na.rm = T),
+    sh_nonstate_private = sum(usd_commitment_defl[channel_nonstate_private==1], na.rm = T)/
+      sum(usd_commitment_defl, na.rm = T),
+    .by = c(donor_code, donor_name, recipient_code, recipient_name, sector_code, sector_name, year)
+  )
 
 sample_n(mediator_dyad_sector_year, 5)
 
@@ -394,91 +391,6 @@ head(estimand_mediator)
 
 # Treatment
 
-## Hazard
-
-### Climate and Weather Extreme Events
-
-Source: [@ipcc2023]
-
--   temperature extremes;
-
--   heavy precipitation;
-
--   pluvial floods;
-
--   river floods;
-
--   drought;
-
--   storms (including tropical cyclones);
-
--   compound events (multivariate and concurrent extremes)
-
-### EM-DAT data
-
-[@delforge2023]
-
-#### Inclusion criteria
-
-At least one must be fulfilled:
-
--   10 or more human deaths;
-
--   100 or more people injured or left homeless;
-
--   declaration by the country of a state of emergency and/or an appeal for international assistance.
-
-#### Event classification
-
-**Natural**, incl.
-
--   Biological;
-
--   **Climatological**, incl.
-
-    -   **Drought**
-
-    -   Glacial lake outburst flood \<-- include in flood category (n=3)?
-
-    -   Wildfire
-
--   Extra-terrestrial;
-
--   Geophysical;
-
--   **Hydrological,** incl.
-
-    -   **Flood**;
-
-    -   Mass movement (wet);
-
-    -   Wave action;
-
--   **Meteorological**, incl.
-
-    -   **Extreme temperature**;
-
-    -   Fog;
-
-    -   **Storm**;
-
--   Technological, incl.
-
-    -   Miscellaneous accident;
-
-    -   Transport.
-
-```{r}
-
-setDT(em_dat)
-
-# filter climate-related disasters only
-event_clim_sample <-  em_dat[grepl('nat-cli-dro|nat-hyd-flo|nat-met-ext|nat-met-sto', classification_key)]
-
-vis_dat(event_clim_sample)
-vis_miss(event_clim_sample)
-```
-
 ## Assignment mechanism
 
 For now, we only consider: - the number of event(s) per year in each country and - the cumulative number of events in each country since 2002.
@@ -500,9 +412,8 @@ treatment <- copy(em_dat)
 treatment <- treatment[year >= 2002
 ][, .( # Number of events
   event_n = .N, 
-  call_n = sum(call == "Yes", na.rm = T),
-  appeal_n = sum(call_type == "Appeal", na.rm = T),
-  declaration_n = sum(call_type == "Declaration", na.rm = T)
+  appeal_n = sum(appeal == "Yes", na.rm = T),
+  declaration_n = sum(declaration == "Yes", na.rm = T)
   ), 
   by = .(country, iso, year)
 ][order(country, year)
@@ -520,7 +431,7 @@ Note: We will add a binary variable (switching/on-off treatment) after merging w
 
 -   Merge the `estimand_mediator` and `treatment` data sets by recipient country-year pairs.
 
-Note (1): we only keep countries which have received/reported aid flows to the oECD. In other words, we don't include: (high-income) bilateral donors, overseas collectivities (ex: la Réunion), and China. Besides, the West Bank and Gaza Strip are not included in the EM-DAT data set.
+> Note (1): we only keep countries which have received/reported aid flows to the OECD. In other words, we don't include: (high-income) bilateral donors, overseas collectivities (ex: la Réunion), and China. Besides, the West Bank and Gaza Strip are not included in the EM-DAT data set.
 
 ```{r}
 # missing matching countries between both data sets
@@ -548,43 +459,9 @@ right_join(distinct(data_disaster, recipient_name),
   head()
 ```
 
-Note (2): we could include treatments of the donor countries in the analysis.
+> Note (2): we could include treatments of the donor countries in the analysis.
 
 First, we need to check that country names are similar between both data sets.
-
-```{r}
-# missing in em_dat / treatment data set: Nauru, Wallis and Futuna, Kosovo, Côte d'Ivoire, Tanzania, West Bank and Gaza Strip, China (People's Republic of), Bolivia, Venezuela, Iran, Micronesia, Mayotte
-
-# first, we merge the iso variable from the treatment data set to the estimand data set.
-estimand_mediator_iso <- left_join(estimand_mediator, distinct(em_dat, country, iso), 
-                               by = c("recipient_name" = "country")) |> 
-  mutate(iso = case_when( # we add the missing ISO
-  recipient_name == "Côte d'Ivoire" ~ 'CIV',
-  recipient_name == "Moldova" ~ 'MDA',
-  recipient_name == "Tanzania" ~ 'TZA',
-  recipient_name == "China (People's Republic of)" ~ 'CHN',
-  recipient_name == "Bolivia" ~ 'BOL',
-  recipient_name == "Venezuela" ~ 'VEN',
-  recipient_name == "Iran" ~ 'IRN',
-  recipient_name == "Kosovo" ~ 'XKX',
-  recipient_name == "Mayotte" ~ 'MYT',
-  recipient_name == "Micronesia" ~ 'FSM',
-  recipient_name == "Nauru" ~ 'NRU',
-  recipient_name == "Wallis and Futuna" ~ 'WLF',
-  recipient_name == "West Bank and Gaza Strip" ~ 'PSE',
-# we also add the ISO of three recipient countries with no observation in the em-dat (treatment) data set
-  recipient_name == "Equatorial Guinea" ~ 'GNQ',
-  recipient_name == "Montserrat" ~ 'MSR',
-  recipient_name == "Turkmenistan" ~ 'TKM',
-  .default = iso
-  )) |> 
-  relocate(iso, .after = recipient_name)
-
-# missing data
- estimand_mediator_iso |> 
-  sample_n(5000) |> 
-  vis_miss()
-```
 
 -   Merge the `estimand_mediator_iso` and `treatment` data sets.
 
@@ -660,7 +537,6 @@ assignment_universe <- assignment_universe[dummy_universe == 1] # rm obs where o
 ```{r}
 save(assignment_universe, file = here("data", "assignment.RData"))
 ```
-
 
 ## Plot
 

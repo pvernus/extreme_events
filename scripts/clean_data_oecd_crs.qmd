@@ -10,33 +10,15 @@ source(here::here('scripts', 'library.R'))
 
 # Data import
 
-Data is extracted from the oeCD platform as text files. There is one text file per year between 2002 and 2022, except for 2002-03 and 2004-05. There are 19 files in total.
-
 ```{r import_raw_data}
-# create path to folder w/ raw data
-folder_path <- here('source', 'crs')
-# create list of all files included in the folder
-file_list <- list.files(path = folder_path, full.names = TRUE, pattern = '^CRS 2')
-# create function to read the csv files
-read_clean_and_process <- function(file_path) {
-  data <- fread(file_path) |> 
-    clean_names() |> # clean variable names
-    mutate_if(is.character, str_trim) # delete white space before/after text
-  
-  return(data)
-}
-
-# apply ad hoc function on all listed csv files in the folder
-data_list <- lapply(file_list, read_clean_and_process)
-# create a data.table
-data_combined <- rbindlist(data_list, fill = T)
+load(here("data", "data_oecd_crs_raw.RData"))
 ```
 
 # Data treatment
 
 ```{r}
-data_short <- data_combined |> 
-  select(1:26, 39, 44:54, 57:59, 62:67, 74:77, 78) |> # select relevant vars
+data_short <- data_oecd_crs_raw |> 
+  select(1:26, 39, 44:54, 57:59, 62:67, 74:77, 78, 94:96) |> # select relevant vars
   mutate_if(is.character, str_trim) # delete white space before/after text
 ```
 
@@ -81,18 +63,9 @@ Besides, duplicates are removed.
 
 # data_clean[duplicated(data_clean)|duplicated(data_clean, fromLast = TRUE),]
 data_calibrated <- unique(data_calibrated)
-
 ```
 
-```{r}
-# save 
-save(data_list, data_combined, data_calibrated,
-     file = here('data', 'data_oecd_crs_raw.RData'))
-# remove
-rm(file_path, file_list, data_list, data_combined, data_short)
-```
-
-## Channel of delivery
+# Channel of delivery
 
 ### Level consistency
 
@@ -105,7 +78,7 @@ The name of the agency can also be added manually by the provider, but reporting
 #### Table: Example with the Donor Government group category.
 
 | Code  | Level 1                    | Code  | Level 2          | Code  | Level 3                                | Reported name                                                                                                |
-|--------|--------|--------|--------|--------|--------|-------------------------|
+|----------|----------|----------|----------|----------|----------|----------------|
 | 10000 | Public Sector Institutions | 11000 | Donor Government | 11001 | Central Government                     | Ex: Ministry Of Employment And Labor, The U.S Department Of Homeland Security, Miscellaneous Suppliers, etc. |
 |       |                            |       |                  | 11002 | Local Government                       | Ex: Comune Di Reggio Emilia, Local Government, Busan Metropolitan City, etc.                                 |
 |       |                            |       |                  | 11003 | Public corporations                    | Ex: The Export-Import Bank Of Korea, Kfw, Public Corporations, etc.                                          |
@@ -144,7 +117,7 @@ data_channel.code_unique <- as_tibble(data_channel.code_unique) |>
 
 setDT(data_channel.code_unique)
 
-rm(data_calibrated, data_channel.channel_parent_code)
+rm(data_channel.channel_parent_code)
 ```
 
 Also, create a variable `channel_level` to specify the level of the most disaggregated channel available.
@@ -154,7 +127,7 @@ Also, create a variable `channel_level` to specify the level of the most disaggr
 # create new variable
 data_channel.channel_level <- copy(data_channel.code_unique)
 data_channel.channel_level <- data_channel.channel_level |> 
-  mutate(channel_level = case_when(
+  fmutate(channel_level = case_when(
     str_sub(channel_code_unique, -3) == "0000" | channel_code_unique == 51000 ~ 1,
     str_sub(channel_code_unique, -3) == "000" ~ 2,
     str_sub(channel_code_unique, -1) != 0 ~ 3,
@@ -163,14 +136,6 @@ data_channel.channel_level <- data_channel.channel_level |>
 
 data_channel <- copy(data_channel.channel_level)
 rm(data_channel.code_unique, data_channel.channel_level)
-
-# sample
-data_channel |> 
-  select(channel_level, channel_parent_code, channel_code_unique, channel_name) |> 
-  filter(!is.na((channel_level))) |> 
-  slice_sample(n = 2, by = channel_level) |> 
-  head(3) |> 
-  gt()
 ```
 
 ### Time consistency
@@ -213,7 +178,7 @@ data_channel <- copy(data_channel.delivery_crs_code)
 rm(data_channel.delivery_crs_code)
 
 data_channel <- data_channel |> 
-  mutate( # new provider variable bilateral/multilateral/private sector
+  fmutate( # new provider variable bilateral/multilateral/private sector
     bi_multi = case_when(
       bi_multi %in% c(1, 2, 3, 7, 8) ~ 'Bilateral',
       bi_multi == 4 ~ 'Multilateral',
@@ -225,37 +190,38 @@ data_channel <- data_channel |>
 ```{r vars agency_size}
 
 data_channel <- data_channel |> 
-  mutate( # new agency var: proxy size w/ the sum of commitments per year
-    agency_size = sum(usd_commitment_defl, na.rm = T),
-    .by = c(donor_name, agency_name, year)
-  )
+  fgroup_by(donor_name, agency_name, year) |> 
+  fmutate( # new agency var: proxy size w/ the sum of commitments per year
+    agency_size = sum(usd_commitment_defl, na.rm = T)
+  ) |> 
+  ungroup()
 ```
 
 ```{r vars donor_agency}
 
 data_channel <- data_channel |> 
-  mutate( # new variable combining donor and extending agency
+  fmutate( # new variable combining donor and extending agency
     donor_agency = paste0(donor_name," - ", agency_name))
 ```
 
 ```{r vars channel_bypass}
 
 data_channel <- data_channel |> 
-  mutate(
+  fmutate(
     channel_nonstate = fct(as.character((if_else(channel_parent_code_2024 %in% c(20000:63000), 1, 0)))),
     channel_nonstate_ngo = fct(as.character((if_else(channel_parent_code_2024 %in% c(20000:23000), 1, 0)))),
     channel_nonstate_multi = fct(as.character((if_else(channel_parent_code_2024 %in% c(40000:47000), 1, 0)))),
     channel_nonstate_private = fct(as.character((if_else(channel_parent_code_2024 %in% c(60000:63000), 1, 0)))),
     channel_other = fct(as.character((if_else(channel_parent_code_2024 == 90000, 1, 0))))
   ) |> 
-  relocate(starts_with('channel_bypass'), .after = channel_name_2024)
+  relocate(channel_nonstate:channel_other, .after = channel_name_2024)
 
 ```
 
 ```{r vars coop_modalities}
 
 data_channel <- data_channel |> 
-  mutate(flow_modality = fct(case_when(
+  fmutate(flow_modality = fct(case_when(
     aid_t %in% c('A01', 'A02') ~ "Budget support",
     aid_t %in% c('B01') ~ "Core contributions",
     aid_t %in% c('B03', 'B031', 'B032', 'B033') ~ "Contributions to specific-purpose programmes/funds",
@@ -267,10 +233,47 @@ data_channel <- data_channel |>
   relocate(flow_modality, .after = aid_t)
 ```
 
+# Projects
+
 ```{r}
-data_clean <- copy(data_channel)
-save(data_clean, delivery_crs_code, file = here("data", "data_oecd_crs_clean.RData"))
-rm(data_channel)
+
+# create variable for the number of distinct projects by donor-recipient-sector-year unit
+data_channel[, n_projects := uniqueN(crs_id), by = .(donor_id, recipient_id, sector_id)]
+```
+
+# Cohorts
+
+```{r}
+## define cohorts
+# donors
+cohort_donor_year <- data_channel |> 
+  fgroup_by(donor_id) |> 
+  fsummarize(cohort_donor = min(year, na.rm = T)) |> 
+  ungroup()
+  
+# recipients
+cohort_recipient_year <- data_channel |> 
+  fgroup_by(recipient_id) |> 
+  fsummarize(cohort_recipient = min(year, na.rm = T)) |> 
+  ungroup()
+
+## merge
+data_channel <- merge(data_channel, cohort_donor_year, by = "donor_id") |> 
+  relocate(cohort_donor, .after = donor_name)
+data_channel <- merge(data_channel, cohort_recipient_year, by = "recipient_id") |> 
+  relocate(cohort_recipient, .after = recipient_name)
+
+## create dummy for "true" zeroes
+# i.e, no flow btw two actors even though both are registered in the CRS database
+data_channel[, dummy_universe := ifelse(year >= cohort_donor & year >= cohort_recipient, 1, 0)]
+```
+
+# Save
+
+```{r}
+setDT(data_channel)
+save(data_channel, delivery_crs_code, 
+     file = here("data", "data_oecd_crs_clean.RData"))
 ```
 
 > To be completed (cleaning of values in channel variables)...
