@@ -13,130 +13,640 @@ load(here('data', 'data_oecd_crs_clean.RData'))
 load(here('data', 'data_emdat_clean.RData'))
 ```
 
-# Single-treated recipients only
+# Unique treatment period only
+
+## Unit-level: recipient-year
 
 ```{r}
 
+## UNIT-LEVEL: recipient-year
+sample_recipient <- data_crs |> 
+  expand(nesting(recipient_id, recipient_name, cohort_recipient), year) |> 
+  filter(!grepl("regional", recipient_name)) |> # remove "regional" recipients
+  fmutate(universe = ifelse(cohort_recipient <= year, 1, 0)) |> 
+  setDT()
+
+## OECD CRS (outcome variables)
+# select vars
+data_recip.outcomes <- data_crs[, .(year, recipient_id, donor_id, donor_name, sector_id, sector_name, crs_id, usd_commitment_defl, channel_nonstate, channel_nonstate_ngo, channel_nonstate_multi, n_projects)
+# summarize to get unit-level: recipient-year
+][, .(
+  commit = sum(usd_commitment_defl, na.rm = T),
+  n_donors = uniqueN(donor_id[usd_commitment_defl != 0]),
+  n_sectors = uniqueN(sector_id[usd_commitment_defl != 0]),
+  n_projects = uniqueN(crs_id, na.rm = T),
+  sh_commit.channel_nonstate = sum(usd_commitment_defl[channel_nonstate=="1"], na.rm = T)/
+                               sum(usd_commitment_defl, na.rm = T)*100,
+  sh_commit.channel_nonstate_ngo = sum(usd_commitment_defl[channel_nonstate_ngo=="1"], na.rm = T)/
+                               sum(usd_commitment_defl, na.rm = T)*100,
+  sh_commit.channel_nonstate_multi = sum(usd_commitment_defl[channel_nonstate_multi=="1"], na.rm = T)/
+                               sum(usd_commitment_defl, na.rm = T)*100,
+  sh_proj.channel_nonstate = n_distinct(crs_id[channel_nonstate=="1"])/n_distinct(crs_id)*100,
+  sh_proj.channel_nonstate_ngo = n_distinct(crs_id[channel_nonstate_ngo=="1"])/n_distinct(crs_id)*100,
+  sh_proj.channel_nonstate_multi = n_distinct(crs_id[channel_nonstate_multi=="1"])/n_distinct(crs_id)*100
+), .(recipient_id, year)
+][order(recipient_id, year)
+# add var on commitment per projects in recipient countries per year
+][, commit_per_project := commit / n_projects]
+
+# merge outcome data
+data_outcomes <- merge(sample_recipient, data_recip.outcomes, by=c("recipient_id", "year"), all.x = TRUE) %>%
+  arrange(recipient_id, year) %>%
+  mutate(across(commit:commit_per_project, 
+                ~ ifelse(universe == 1 & is.na(.), 0, .)))
+  
+
+## EM-DAT (treatment)
 # select vars of interest
-data_binary_treatment <- data_emdat[, .(recipient_name, 
-                                        start_year, 
+data.binary_treatment <- data_emdat[, .(recipient_id, 
+                                        year = start_year, 
                                         clim_event, 
                                         treatment_all = switching_event_dummy, 
                                         treatment_appeal = switching_appeal_dummy)]
 
-# keep unique obs
-data_binary_treatment.unique <- unique(data_binary_treatment)
+# filter for weather and climate events
+data_treatment <- data.binary_treatment[clim_event == 1
+# summarize to get unit-level: recipient-year
+][, .(
+  treat_all = max(treatment_all, na.rm = T),
+  treat_appeal = max(treatment_appeal, na.rm = T)
+), by = .(recipient_id, year)]
 
-# convert event dummy from factor to numeric
-data_binary_treatment.unique$treat_all <- as.numeric(levels(data_binary_treatment.unique$treat_all))[data_binary_treatment.unique$treat_all] # all types of events
-
-data_binary_treatment.unique$treat_appeal <- as.numeric(levels(data_binary_treatment.unique$treat_appeal))[data_binary_treatment.unique$treat_appeal] # only "appeal" events
+# merge treatment data
+data_recip.binary_treatment <- merge(data_outcomes, data_treatment, 
+                                            by=c("recipient_id", "year"), 
+                                            all.x = T) |> 
+  mutate(across(starts_with("treat"), 
+                ~ ifelse(universe == 1 & is.na(.), 0, .)),
+         across(starts_with("treat"), 
+                ~ ifelse(universe == 0, NA, .))
+  )
 
 ```
 
+### Treatment status
 
 ```{r treatment_status}
 
-# plot treatment status
-panelView::panelview(1 ~ treat_all, # all event types
-          data = data_binary_treatment.unique, index = c("recipient_name","year"), 
-          xlab = "Year", ylab = "Country",
-          legend.labs = c("Control Recipients", 
-                          "Treated Recipients", 
-                          "Missing"),
-          main = "Treatment Status: All events",
-          by.timing = TRUE,
-          collapse.history = "TRUE")
-# "appeal" events - binary
-panelView::panelview(1 ~ treat_appeal, # 'appeal' event type only
-          data = data_binary_treatment.unique, index = c("recipient_name","year"), 
+# all events - binary
+panelView::panelview(1 ~ treat_all, # 
+          data = data_recip.binary_treatment, index = c("recipient_name","year"), 
           xlab = "Year", ylab = "Number of Countries",
           legend.labs = c("Control Recipients", 
-                          "Treated Recipients", 
+                          "Treated Recipients",
                           "Missing"),
-          main = "Treatment Status: Events w/ call for international assistance",
+          main = "Treatment Status: all climate and weather events",
+          by.timing = TRUE,
+          collapse.history = "TRUE")
+
+# international assistance call ("appeal") events - binary
+panelView::panelview(1 ~ treat_appeal, # 
+          data = data_recip.binary_treatment, index = c("recipient_name","year"), 
+          xlab = "Year", ylab = "Number of Countries",
+          legend.labs = c("Control Recipients", 
+                          "Treated Recipients",
+                          "Missing"),
+          main = "Treatment Status: climate and weather events\nleading to an international call for assistance",
           by.timing = TRUE,
           collapse.history = "TRUE")
 
 ```
 
--   Remove recipient countries with more than one treatment period (i.e. only keep countries with no or one treatment period).
+-   Remove recipient countries with more than one "appeal" treatment period (i.e. only keep countries with no or one treatment period).
 
 ```{r}
 
 # sum number of treated years by recipient
-data_all.treated_year_N <- data_binary_treatment.unique[, .( # all
-  treated_year_N = sum(treat_all, na.rm = T)
+names_recip.appeal.binary_single_treatment <- data_recip.binary_treatment[, .( 
+  treated_year_N = sum(treat_appeal, na.rm = T) # appeal only
 ), by = recipient_name
-][order(-treated_year_N)]
-
-data_appeal.treated_year_N <- data_binary_treatment.unique[, .( # appeal only
-  treated_year_N = sum(treat_appeal, na.rm = T)
-), by = recipient_name
-][order(-treated_year_N)]
-
+# order by number of treated years
+][order(-treated_year_N)
+# keep names of single-treated recipients
+][treated_year_N == 1, recipient_name]
+  
 # remove recipients w/ more than one treated year
-data_all.treated_year_N[treated_year_N > 1, ] # all 
-data_appeal.treated_year_N[treated_year_N > 1, ] # appeal only
-
-# create object with names of the recipients w/ more than one treated year
-data_all.multi_treated_recipients <- data_all.treated_year_N[treated_year_N > 1, recipient_name] # all
-data_appeal.multi_treated_recipients <- data_appeal.treated_year_N[treated_year_N > 1, recipient_name] # appeal only
-
-# remove recipients w/ more than one treated year
-data.single_treated_all <- data[!recipient_name %in% data_all.multi_treated_recipients, ] # all
-data.single_treated_appeal <- data[!recipient_name %in% data_appeal.multi_treated_recipients, ] # appeal only
+data_recip.appeal.binary_single_treatment <- data_recip.binary_treatment[recipient_name %in% names_recip.appeal.binary_single_treatment, ]
 
 # list single treated recipients
-unique(data.single_treated_all$recipient_name) # all
-unique(data.single_treated_appeal$recipient_name) # appeal only
+unique(data_recip.appeal.binary_single_treatment$recipient_name)
 ```
 
--   create new `period` variable: year - year\[treatment==1\], by = recipient
+### Commitments
 
-```{r}
+```{r commitments}
 
 # select relevant vars
-between_periods_comparison <- single_treated_recipient_data[, .(
-  recipient_code, recipient_name,
+between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
+  recipient_id, recipient_name,
   year,
-  commitment, disbursement,
-  treatment = switching_appeal_dummy
+  commit,
+  treatment = treat_appeal
 )
-# sum(marize) finance flows by recipient and year
-][, .(
-  commit = sum(commitment, na.rm = T),
-  disb = sum(disbursement, na.rm = T)
-), by = .(recipient_code, recipient_name, year, treatment)
-# create new var `period` 
-][, period := year - year[treatment==1], by = .(recipient_code, recipient_name)
-# order observations by recipient and year
-][order(recipient_code, year), 
+# remove "false" zeroes, i.e., missing obs. due to recipient not registered in crs a period t
+][!is.na(treatment),
+# order observations 
+][order(recipient_id, year),
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = recipient_id
 # create new var `lag1`
-][, lag1 := shift(commit, type = "lag"), by = .(recipient_code, recipient_name)
+][, lag1 := shift(commit, type = "lag"), by = recipient_id
 # create new var `diff`
-][, diff := commit - lag1
-]
-  
-head(between_periods_comparison)
+][, diff := commit - lag1]
 
 data <- between_periods_comparison[period %in% c(-2:2)]
 
-ggplot(aes(x = period, y = diff)) +
-  geom_boxplot()
+ggplot(data, aes(x = diff)) +
+  geom_histogram(binwidth=200) +
+  theme_minimal() +
+  labs(title="Distribution of yearly changes in commitments to affected countries\ntwo periods pre/post-disaster",
+       subtitle="Outlier = Ukraine",
+       x="Commitments (USD, Millions)",
+       y="Number of countries")
+
+
+ggbetweenstats(
+  data = filter(data, !recipient_name %in% "Ukraine"), 
+  x = period,
+  y = diff,
+  centrality.plotting = TRUE,
+  bf.message = F,
+  results.subtitle = F,
+  violin.args = list(width = 0, linewidth = 0),
+  xlab = "Period (treatment = 0)",
+  ylab = "Change in commitments (USD, Millions)",
+  title = "Yearly changes in commitments to affected countries\ntwo periods pre/post-disaster",
+  caption = "Removed outlier: Ukraine"
+)
+
+slice_min(data, diff, n=3, by = period) |> arrange(period)
+slice_max(data, diff, n=3, by = period) |> arrange(period)
+
+```
+
+### Donors
+
+```{r donors}
+
+# select relevant vars
+between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
+  recipient_id, recipient_name,
+  year,
+  outcome = n_donors,
+  treatment = treat_appeal
+)
+# remove "false" zeroes, i.e., missing obs. due to recipient not registered in crs a period t
+][!is.na(treatment),
+# order observations 
+][order(recipient_id, year),
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = recipient_id
+# create new var `lag1`
+][, lag1 := shift(outcome, type = "lag"), by = recipient_id
+# create new var `diff`
+][, diff := outcome - lag1]
+
+  
+# head(between_periods_comparison)
+
+data <- between_periods_comparison[period %in% c(-2:2)]
+
+# head(data)
+# data |> arrange(-diff)
+
+ggplot(data, aes(x = diff)) +
+  geom_histogram() +
+  theme_minimal() +
+  labs(title="Distribution of yearly changes in the number of donors active in affected countries\ntwo periods pre/post-disaster",
+       subtitle="Outlier = Ukraine",
+       x="Number of donors",
+       y="Number of countries")
+
+ggbetweenstats(
+  data = filter(data, !recipient_name %in% "Ukraine"), 
+  x = period,
+  y = diff,
+  centrality.plotting = TRUE,
+  bf.message = F,
+  results.subtitle = F,
+  violin.args = list(width = 0, linewidth = 0),
+  xlab = "Period (treatment = 0)",
+  ylab = "Change in the number of donors",
+  title = "Yearly changes in the number of donors active in affected countries\ntwo periods pre/post-disaster",
+  caption = "Removed outlier: Ukraine"
+)
+
+slice_min(data, diff, n=3, by = period) |> arrange(period)
+slice_max(data, diff, n=3, by = period) |> arrange(period)
+
+```
+
+### Sectors
+
+```{r sectors}
+
+# select relevant vars
+between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
+  recipient_id, recipient_name,
+  year,
+  outcome = n_sectors,
+  treatment = treat_appeal
+)
+# remove "false" zeroes, i.e., missing obs. due to recipient not registered in crs a period t
+][!is.na(treatment),
+# order observations 
+][order(recipient_id, year),
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = recipient_id
+# create new var `lag1`
+][, lag1 := shift(outcome, type = "lag"), by = recipient_id
+# create new var `diff`
+][, diff := outcome - lag1]
+
+  
+# head(between_periods_comparison)
+
+data <- between_periods_comparison[period %in% c(-2:2)]
+
+# head(data)
+# data |> arrange(-diff)
+
+ggplot(data, aes(x = diff)) +
+  geom_histogram() +
+  theme_minimal() +
+  labs(title="Distribution of yearly changes in the number of active sectors in affected countries\ntwo periods pre/post-disaster",
+       subtitle="Outlier = Micronesia",
+       x="Number of sectors",
+       y="Number of countries")
 
 ggbetweenstats(
   data = data, 
   x = period,
   y = diff,
-  type = "np"
+  centrality.plotting = TRUE,
+  type = "np",
+  bf.message = F,
+  results.subtitle = F,
+  violin.args = list(width = 0, linewidth = 0),
+  xlab = "Period (treatment = 0)",
+  ylab = "Change in the number of sectors",
+  title = "Yearly changes in the number of active sectors in affected countries\ntwo periods pre/post-disaster"
 )
 
+slice_min(data, diff, n=3, by = period) |> arrange(period)
+slice_max(data, diff, n=3, by = period) |> arrange(period)
 
-data_delivery[recipient_name=="Philippines", .(year, recipient_name)][order(year), ][]
 ```
 
--   new variables lag1
--   new variables diff year - lag1
--   plot
+### Projects
+
+```{r sectors}
+
+# select relevant vars
+between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
+  recipient_id, recipient_name,
+  year,
+  outcome = n_projects,
+  treatment = treat_appeal
+)
+# remove "false" zeroes, i.e., missing obs. due to recipient not registered in crs a period t
+][!is.na(treatment),
+# order observations 
+][order(recipient_id, year),
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = recipient_id
+# create new var `lag1`
+][, lag1 := shift(outcome, type = "lag"), by = recipient_id
+# create new var `diff`
+][, diff := outcome - lag1]
+
+  
+# head(between_periods_comparison)
+
+data <- between_periods_comparison[period %in% c(-2:2)]
+
+# head(data)
+# data |> arrange(-diff)
+
+ggplot(data, aes(x = diff)) +
+  geom_density() +
+  theme_minimal() +
+  labs(title="Distribution of yearly changes in the number of projects in affected countries\ntwo periods pre/post-disaster",
+       x="Number of projects",
+       y="Number of countries")
+
+ggbetweenstats(
+  data = data, 
+  x = period,
+  y = diff,
+  centrality.plotting = TRUE,
+  type="np",
+  bf.message = F,
+  results.subtitle = F,
+  violin.args = list(width = 0, linewidth = 0),
+  xlab = "Period (treatment = 0)",
+  ylab = "Change in the number of projects",
+  title = "Yearly changes in the number of projects in affected countries\ntwo periods pre/post-disaster"
+)
+
+slice_min(data, diff, n=3, by = period) |> arrange(period)
+slice_max(data, diff, n=3, by = period) |> arrange(period)
+
+```
+
+### Size of projects
+
+```{r projects}
+
+# select relevant vars
+between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
+  recipient_id, recipient_name,
+  year,
+  outcome = commit_per_project,
+  treatment = treat_appeal
+)
+# remove "false" zeroes, i.e., missing obs. due to recipient not registered in crs a period t
+][!is.na(treatment),
+# order observations 
+][order(recipient_id, year),
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = recipient_id
+# create new var `lag1`
+][, lag1 := shift(outcome, type = "lag"), by = recipient_id
+# create new var `diff`
+][, diff := outcome - lag1]
+
+  
+# head(between_periods_comparison)
+
+data <- between_periods_comparison[period %in% c(-2:2)]
+
+# head(data)
+# data |> arrange(-diff)
+
+ggplot(data, aes(x = diff)) +
+  geom_density() +
+  theme_minimal() +
+  labs(title="Distribution of yearly changes in the size of projects in affected countries\ntwo periods pre/post-disaster",
+       x="Change in commitments (USD, Millions)",
+       y="Number of countries")
+
+ggbetweenstats(
+  data = data, 
+  x = period,
+  y = diff,
+  centrality.plotting = TRUE,
+  type="np",
+  bf.message = F,
+  results.subtitle = F,
+  violin.args = list(width = 0, linewidth = 0),
+  xlab = "Period (treatment = 0)",
+  ylab = "Change in commitments (USD, Millions)",
+  title = "Yearly changes in the average project size in affected countries\ntwo periods pre/post-disaster"
+)
+
+slice_min(data, diff, n=3, by = period) |> arrange(period)
+slice_max(data, diff, n=3, by = period) |> arrange(period)
+
+```
+
+### Channel of delivery
+
+#### Commitment share
+
+##### Non-state
+
+```{r}
+
+# select relevant vars
+between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
+  recipient_id, recipient_name,
+  year,
+  outcome = sh_commit.channel_nonstate,
+  treatment = treat_appeal
+)
+# remove "false" zeroes, i.e., missing obs. due to recipient not registered in crs a period t
+][!is.na(treatment),
+# order observations 
+][order(recipient_id, year),
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = recipient_id
+# create new var `lag1`
+][, lag1 := shift(outcome, type = "lag"), by = recipient_id
+# create new var `diff`
+][, diff := outcome - lag1]
+
+  
+# head(between_periods_comparison)
+
+data <- between_periods_comparison[period %in% c(-2:2)]
+
+# head(data)
+# data |> arrange(-diff)
+
+data |> 
+  mutate(period = factor(period, levels=c("2", "1", "0", "-1", "-2"))) |> 
+  ggplot(aes(x = diff, y = period, fill=period)) +
+  ggridges::geom_density_ridges(alpha=.2) +
+  scale_fill_viridis_d() +
+  theme_minimal() + 
+  labs(title="Distribution of annual perc. pt. change in the proportion of commitments channelled through non-state entities\ntwo periods pre/post-disaster",
+       x="Annual % point change")
+
+ggbetweenstats(
+  data = data, 
+  x = period,
+  y = diff,
+  centrality.plotting = TRUE,
+  type="np",
+  bf.message = F,
+  results.subtitle = F,
+  violin.args = list(width = 0, linewidth = 0),
+  xlab = "Period (treatment = 0)",
+  ylab = "% change",
+  title = "Annual percentage point change in the proportion of commitments channelled through non-state entities\ntwo periods pre/post-disaster"
+)
+
+slice_min(data, diff, n=3, by = period) |> arrange(period)
+slice_max(data, diff, n=3, by = period) |> arrange(period)
+
+```
+
+##### Non-state NGO
+
+```{r}
+
+# select relevant vars
+between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
+  recipient_id, recipient_name,
+  year,
+  outcome = sh_commit.channel_nonstate_ngo,
+  treatment = treat_appeal
+)
+# remove "false" zeroes, i.e., missing obs. due to recipient not registered in crs a period t
+][!is.na(treatment),
+# order observations 
+][order(recipient_id, year),
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = recipient_id
+# create new var `lag1`
+][, lag1 := shift(outcome, type = "lag"), by = recipient_id
+# create new var `diff`
+][, diff := outcome - lag1]
+
+  
+# head(between_periods_comparison)
+
+data <- between_periods_comparison[period %in% c(-2:2)]
+
+# head(data)
+# data |> arrange(-diff)
+
+data |> 
+  mutate(period = factor(period, levels=c("2", "1", "0", "-1", "-2"))) |> 
+  ggplot(aes(x = diff, y = period, fill=period)) +
+  ggridges::geom_density_ridges(alpha=.2) +
+  scale_fill_viridis_d() +
+  theme_minimal() + 
+  labs(title="Distribution of annual perc. pt. change in the proportion of commitments channelled through NGOs\ntwo periods pre/post-disaster",
+       x="Annual % point change")
+
+ggbetweenstats(
+  data = data, 
+  x = period,
+  y = diff,
+  centrality.plotting = TRUE,
+  type="np",
+  bf.message = F,
+  results.subtitle = F,
+  violin.args = list(width = 0, linewidth = 0),
+  xlab = "Period (treatment = 0)",
+  ylab = "% change",
+  title = "Annual percentage point change in the proportion of commitments channelled through NGOs\ntwo periods pre/post-disaster"
+)
+
+slice_min(data, diff, n=3, by = period) |> arrange(period)
+slice_max(data, diff, n=3, by = period) |> arrange(period)
+
+```
+
+
+
+```{r}
+
+# select relevant vars
+between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
+  recipient_id, recipient_name,
+  year,
+  outcome = wght_prop_channel_nonstate,
+  treatment = treat_appeal
+)
+# remove "false" zeroes, i.e., missing obs. due to recipient not registered in crs a period t
+][!is.na(treatment),
+# order observations 
+][order(recipient_id, year),
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = recipient_id
+# create new var `lag1`
+][, lag1 := shift(outcome, type = "lag"), by = recipient_id
+# create new var `diff`
+][, diff := outcome - lag1]
+
+  
+# head(between_periods_comparison)
+
+data <- between_periods_comparison[period %in% c(-2:2)]
+
+# head(data)
+# data |> arrange(-diff)
+
+data |> 
+  mutate(period = factor(period, levels=c("2", "1", "0", "-1", "-2"))) |> 
+  ggplot(aes(x = diff, y = period, fill=period)) +
+  ggridges::geom_density_ridges(alpha=.2) +
+  scale_fill_viridis_d() +
+  theme_minimal() + 
+  labs(title="Distribution of yearly changes in the share of commitments through non-state channels in affected countries\ntwo periods pre/post-disaster",
+       x="% change",
+       y="Number of countries")
+
+ggbetweenstats(
+  data = data, 
+  x = period,
+  y = diff,
+  centrality.plotting = TRUE,
+  type="np",
+  bf.message = F,
+  results.subtitle = F,
+  violin.args = list(width = 0, linewidth = 0),
+  xlab = "Period (treatment = 0)",
+  ylab = "% change",
+  title = "Yearly change in the share of commitments through non-state channels in affected countries\ntwo periods pre/post-disaster"
+)
+
+slice_min(data, diff, n=3, by = period) |> arrange(period)
+slice_max(data, diff, n=3, by = period) |> arrange(period)
+
+```
+
+
+## Unit-level: recipient-sector-year
+
+```{r}
+
+## UNIT-LEVEL: recipient-year
+sample_recipient <- data_crs |> 
+  expand(nesting(recipient_id, recipient_name, cohort_recipient), nesting(sector_id, sector_name), year) |> 
+  filter(!grepl("regional", recipient_name)) |> # remove "regional" recipients
+  fmutate(universe = ifelse(cohort_recipient <= year, 1, 0)) |> 
+  setDT()
+
+## OECD CRS (outcome variables)
+# select vars
+data_recip.outcomes <- data_crs[, .(year, recipient_id, donor_id, donor_name, sector_id, sector_name, crs_id, usd_commitment_defl, channel_nonstate, channel_nonstate_ngo, channel_nonstate_multi, n_projects)
+# summarize to get unit-level: recipient-year
+][, .(
+  commit = sum(usd_commitment_defl, na.rm = T),
+  n_donors = uniqueN(donor_id[usd_commitment_defl != 0]),
+  n_sectors = uniqueN(sector_id[usd_commitment_defl != 0]),
+  n_projects = uniqueN(crs_id, na.rm = T)
+), .(recipient_id, year)
+][order(recipient_id, year)
+# add var on commitment per projects in recipient countries per year
+][, commit_per_project := commit / n_projects]
+
+# merge outcome data
+data_outcomes <- merge(sample_recipient, data_recip.outcomes, by=c("recipient_id", "year"), all.x = TRUE) %>%
+  arrange(recipient_id, year) %>%
+  mutate(across(commit:commit_per_project, 
+                ~ ifelse(universe == 1 & is.na(.), 0, .)))
+  
+
+## EM-DAT (treatment)
+# select vars of interest
+data.binary_treatment <- data_emdat[, .(recipient_id, 
+                                        year = start_year, 
+                                        clim_event, 
+                                        treatment_all = switching_event_dummy, 
+                                        treatment_appeal = switching_appeal_dummy)]
+
+# filter for weather and climate events
+data_treatment <- data.binary_treatment[clim_event == 1
+# summarize to get unit-level: recipient-year
+][, .(
+  treat_all = max(treatment_all, na.rm = T),
+  treat_appeal = max(treatment_appeal, na.rm = T)
+), by = .(recipient_id, year)]
+
+# merge treatment data
+data_recip.binary_treatment <- merge(data_outcomes, data_treatment, 
+                                            by=c("recipient_id", "year"), 
+                                            all.x = T) |> 
+  mutate(across(starts_with("treat"), 
+                ~ ifelse(universe == 1 & is.na(.), 0, .)),
+         across(starts_with("treat"), 
+                ~ ifelse(universe == 0, NA, .))
+  )
+
+```
 

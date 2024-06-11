@@ -233,14 +233,6 @@ data_channel <- data_channel |>
   relocate(flow_modality, .after = aid_t)
 ```
 
-# Projects
-
-```{r}
-
-# create variable for the number of distinct projects by donor-recipient-sector-year unit
-data_channel[, n_projects := uniqueN(crs_id), by = .(donor_id, recipient_id, sector_id)]
-```
-
 # Cohorts
 
 ```{r}
@@ -265,14 +257,16 @@ data_channel <- merge(data_channel, cohort_recipient_year, by = "recipient_id") 
 
 ## create dummy for "true" zeroes
 # i.e, no flow btw two actors even though both are registered in the CRS database
-data_channel[, dummy_universe := ifelse(year >= cohort_donor & year >= cohort_recipient, 1, 0)]
+data_channel <- data_channel |> 
+  fmutate(dummy_universe = ifelse(year >= cohort_donor & year >= cohort_recipient, 1, 0))
 ```
 
 # Save
 
 ```{r}
-setDT(data_channel)
-save(data_channel, delivery_crs_code, 
+data_crs <- copy(data_channel)
+setDT(data_crs)
+save(data_crs, delivery_crs_code, 
      file = here("data", "data_oecd_crs_clean.RData"))
 ```
 
