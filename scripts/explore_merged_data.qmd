@@ -152,37 +152,92 @@ between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
 # create new var `lag1`
 ][, lag1 := shift(commit, type = "lag"), by = recipient_id
 # create new var `diff`
-][, diff := commit - lag1]
+][, `:=` (
+  diff = commit - lag1,
+  ratio = commit / lag1
+  )]
 
-data <- between_periods_comparison[period %in% c(-2:2)]
+data <- between_periods_comparison[period %in% c(-5:5)]
 
-ggplot(data, aes(x = diff)) +
-  geom_histogram(binwidth=200) +
+# histogram
+data |> 
+  filter(ratio < 10) |> 
+  mutate(period = factor(period, levels=c("5", "4", "3", "2", "1", "0", "-1", "-2", "-3", "-4", "-5")),
+         treatment=ifelse(period==0,"Treatment","Control")) |> 
+  ggplot(aes(x = ratio, y = period, fill=treatment)) +
+  geom_density_ridges(alpha=0.3, stat = "binline") +
+  scale_fill_manual(values=c("grey", "coral")) +
+  geom_vline(xintercept = 1, linetype="dashed", linewidth=1) + 
+  scale_x_continuous(breaks = c(0, 1, 5, 10)) +
+  theme_minimal() + 
+  labs(title="Distribution of current/lag commitments ratio",
+       subtitle = "Ratio < 1 = decrease in annual aid commitments",
+       x="Commitments in period t / Commitments in period t-1",
+       y="Period (treatment = 0)",
+       caption="Remove outliers: ratio > 10")
+
+
+summarize(data,
+          n=length(recipient_id),
+          min=round(min(ratio, na.rm = T), 3),
+          median=round(median(ratio, na.rm = T), 3),
+          mean=round(mean(ratio, na.rm = T), 3),
+          max=round(max(ratio, na.rm = T), 3),
+          .by = period
+          ) |> 
+  gt(caption = "Ratio commitments period t/t-1")
+
+summarize(data,
+          min=min(commit, na.rm = T),
+          median=median(commit, na.rm = T),
+          mean=mean(commit, na.rm = T),
+          max=max(commit, na.rm = T),
+          IQR=IQR(commit, na.rm = T),
+          sd=sd(commit, na.rm = T),
+          .by = period
+          )
+
+# lines: absolute value
+data |> 
+  select(recipient_id, commit, diff, period) |> 
+  fmutate(commit = log10(commit),
+          period = factor(period, levels=c("5", "4", "3", "2", "1", "0", "-1", "-2", "-3", "-4", "-5")),
+          treatment = ifelse(period %in% c(-1:0), "Treatment", "Control")
+         ) |> 
+  ggplot(aes(x=period, y=commit, group=recipient_id)) +
+  geom_vline(xintercept = 0, linetype="dashed", color="slategray4", linewidth=1) +
+  geom_point(color="grey80") +
+  geom_line(aes(color=treatment)) +
+  scale_color_manual(values = c("gray70", "coral")) +
   theme_minimal() +
-  labs(title="Distribution of yearly changes in commitments to affected countries\ntwo periods pre/post-disaster",
-       subtitle="Outlier = Ukraine",
-       x="Commitments (USD, Millions)",
-       y="Number of countries")
+  labs(x="Period (treatment = 0)",
+       y="Commitments (USD, Millions, log10)",
+       color="Treatment status"
+       )
 
+# Outliers
+# slice_min(data, diff, n=3, by = period) |> filter(period > 0)
+# slice_max(data, diff, n=3, by = period) |> filter(period >= -1)
 
-ggbetweenstats(
-  data = filter(data, !recipient_name %in% "Ukraine"), 
-  x = period,
-  y = diff,
-  centrality.plotting = TRUE,
-  bf.message = F,
-  results.subtitle = F,
-  violin.args = list(width = 0, linewidth = 0),
-  xlab = "Period (treatment = 0)",
-  ylab = "Change in commitments (USD, Millions)",
-  title = "Yearly changes in commitments to affected countries\ntwo periods pre/post-disaster",
-  caption = "Removed outlier: Ukraine"
-)
-
-slice_min(data, diff, n=3, by = period) |> arrange(period)
-slice_max(data, diff, n=3, by = period) |> arrange(period)
+# All panel: commit
+data |> 
+  ggplot(aes(x=period, y=commit, group=recipient_id)) +
+  geom_vline(xintercept = 0, linetype="dashed", color="coral", linewidth=1) +
+  geom_line() +
+  facet_wrap(~ recipient_name, scales = "free_y") +
+  theme_minimal() +
+  labs(x="Period (treatment = 0)",
+       y="Commitments (USD, Millions, log10)",
+       color="Treatment status"
+       )
 
 ```
+
+> Comments: 
+- distribution doesn't change much across periods; 
+- decrease in means and medians in t=0;
+- no clear trend in post-disaster periods, increased variance partly due to outliers: three biggest absolute aid surges in t=0 are the three biggest drops in t=1 != Mexico: strong drop in t=0, then surge in t=1 & t=2; 
+- some anticipation effect seems to occur in t=-1
 
 ### Donors
 
@@ -209,10 +264,23 @@ between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
   
 # head(between_periods_comparison)
 
-data <- between_periods_comparison[period %in% c(-2:2)]
+data <- between_periods_comparison[period %in% c(-5:5)]
 
-# head(data)
-# data |> arrange(-diff)
+# histogram
+data |> 
+  mutate(period = factor(period, levels=c("5", "4", "3", "2", "1", "0", "-1", "-2", "-3", "-4", "-5")),
+         treatment=ifelse(period==0,"Treatment","Control")) |> 
+  ggplot(aes(x = outcome, y = period, fill=treatment)) +
+  geom_density_ridges(alpha=0.3, stat = "binline") +
+  scale_fill_manual(values=c("grey", "coral")) +
+  theme_minimal() + 
+  labs(title="Distribution of the number of donors per country",
+       x="Number of donors",
+       y="Period (treatment = 0)")
+
+###########
+## TO DO ##
+###########
 
 ggplot(data, aes(x = diff)) +
   geom_histogram() +
@@ -522,7 +590,7 @@ ggbetweenstats(
   violin.args = list(width = 0, linewidth = 0),
   xlab = "Period (treatment = 0)",
   ylab = "% change",
-  title = "Annual percentage point change in the proportion of commitments channelled through NGOs\ntwo periods pre/post-disaster"
+  title = "Annual percentage point change\nin the proportion of commitments channelled through NGOs"
 )
 
 slice_min(data, diff, n=3, by = period) |> arrange(period)
