@@ -4,18 +4,15 @@ format: html
 editor: visual
 ---
 
-```{r load_packages}
+```{r load}
+# packages
 source(here::here('scripts', 'library.R'))
-```
-
-```{r load_data}
+# data
 load(here('data', 'data_oecd_crs_clean.RData'))
 load(here('data', 'data_emdat_clean.RData'))
 ```
 
-# Unique treatment period only
-
-## Unit-level: recipient-year
+# Unit-level: recipient-year
 
 ```{r}
 
@@ -28,13 +25,17 @@ sample_recipient <- data_crs |>
 
 ## OECD CRS (outcome variables)
 # select vars
-data_recip.outcomes <- data_crs[, .(year, recipient_id, donor_id, donor_name, sector_id, sector_name, crs_id, usd_commitment_defl, channel_nonstate, channel_nonstate_ngo, channel_nonstate_multi, n_projects)
+data_recip.outcomes <- data_crs[, .(year, recipient_id, recipient_name, donor_id, donor_name, sector_id, sector_name, purpose_id = purpose_code, purpose_name, crs_id, usd_commitment_defl, channel_nonstate, channel_nonstate_ngo, channel_nonstate_multi, n_projects)
 # summarize to get unit-level: recipient-year
 ][, .(
   commit = sum(usd_commitment_defl, na.rm = T),
   n_donors = uniqueN(donor_id[usd_commitment_defl != 0]),
   n_sectors = uniqueN(sector_id[usd_commitment_defl != 0]),
+  n_purpose = uniqueN(purpose_id[usd_commitment_defl != 0]),
   n_projects = uniqueN(crs_id, na.rm = T),
+  commit.channel_nonstate = sum(usd_commitment_defl[channel_nonstate=="1"], na.rm = T),
+  commit.channel_nonstate_ngo = sum(usd_commitment_defl[channel_nonstate_ngo=="1"], na.rm = T),
+  commit.channel_nonstate_multi = sum(usd_commitment_defl[channel_nonstate_multi=="1"], na.rm = T),
   sh_commit.channel_nonstate = sum(usd_commitment_defl[channel_nonstate=="1"], na.rm = T)/
                                sum(usd_commitment_defl, na.rm = T)*100,
   sh_commit.channel_nonstate_ngo = sum(usd_commitment_defl[channel_nonstate_ngo=="1"], na.rm = T)/
@@ -55,6 +56,13 @@ data_outcomes <- merge(sample_recipient, data_recip.outcomes, by=c("recipient_id
   mutate(across(commit:commit_per_project, 
                 ~ ifelse(universe == 1 & is.na(.), 0, .)))
   
+```
+
+# Treatment status
+
+## Switching treatment only
+
+```{r}
 
 ## EM-DAT (treatment)
 # select vars of interest
@@ -72,6 +80,12 @@ data_treatment <- data.binary_treatment[clim_event == 1
   treat_appeal = max(treatment_appeal, na.rm = T)
 ), by = .(recipient_id, year)]
 
+```
+
+### Treatment status
+
+```{r}
+
 # merge treatment data
 data_recip.binary_treatment <- merge(data_outcomes, data_treatment, 
                                             by=c("recipient_id", "year"), 
@@ -83,8 +97,6 @@ data_recip.binary_treatment <- merge(data_outcomes, data_treatment,
   )
 
 ```
-
-### Treatment status
 
 ```{r treatment_status}
 
@@ -112,7 +124,9 @@ panelView::panelview(1 ~ treat_appeal, #
 
 ```
 
--   Remove recipient countries with more than one "appeal" treatment period (i.e. only keep countries with no or one treatment period).
+## Unique treatment only
+
+-   Remove recipient countries with more than one "*appeal*" treatment period i.e. only keep countries with no or one treatment period where treatment is the occurrence of disaster leading to an call for international assistance.
 
 ```{r}
 
@@ -132,7 +146,28 @@ data_recip.appeal.binary_single_treatment <- data_recip.binary_treatment[recipie
 unique(data_recip.appeal.binary_single_treatment$recipient_name)
 ```
 
-### Commitments
+### Treatment status
+
+```{r}
+
+# international assistance call ("appeal") events - binary
+panelView::panelview(1 ~ treat_appeal, # 
+          data = data_recip.appeal.binary_single_treatment, index = c("recipient_name","year"), 
+          xlab = "Year", ylab = "Number of Countries",
+          legend.labs = c("Control Recipients", 
+                          "Treated Recipients",
+                          "Missing"),
+          main = "Treatment Status: unique climate and weather event\nleading to an international call for assistance",
+          by.timing = TRUE,
+          collapse.history = "TRUE")
+
+```
+
+# Outcome variables
+
+## Commitments
+
+### All
 
 ```{r commitments}
 
@@ -176,7 +211,6 @@ data |>
        y="Period (treatment = 0)",
        caption="Remove outliers: ratio > 10")
 
-
 summarize(data,
           n=length(recipient_id),
           min=round(min(ratio, na.rm = T), 3),
@@ -201,7 +235,7 @@ summarize(data,
 data |> 
   select(recipient_id, commit, diff, period) |> 
   fmutate(commit = log10(commit),
-          period = factor(period, levels=c("5", "4", "3", "2", "1", "0", "-1", "-2", "-3", "-4", "-5")),
+          period = factor(period),
           treatment = ifelse(period %in% c(-1:0), "Treatment", "Control")
          ) |> 
   ggplot(aes(x=period, y=commit, group=recipient_id)) +
@@ -239,15 +273,17 @@ data |>
 - no clear trend in post-disaster periods, increased variance partly due to outliers: three biggest absolute aid surges in t=0 are the three biggest drops in t=1 != Mexico: strong drop in t=0, then surge in t=1 & t=2; 
 - some anticipation effect seems to occur in t=-1
 
-### Donors
+### Non-state
 
-```{r donors}
+#### Volume
+
+```{r commit_nonstate}
 
 # select relevant vars
 between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
   recipient_id, recipient_name,
   year,
-  outcome = n_donors,
+  outcome = commit.channel_nonstate,
   treatment = treat_appeal
 )
 # remove "false" zeroes, i.e., missing obs. due to recipient not registered in crs a period t
@@ -259,232 +295,94 @@ between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
 # create new var `lag1`
 ][, lag1 := shift(outcome, type = "lag"), by = recipient_id
 # create new var `diff`
-][, diff := outcome - lag1]
-
-  
-# head(between_periods_comparison)
+][, `:=` (
+  diff = outcome - lag1,
+  ratio = outcome / lag1
+  )]
 
 data <- between_periods_comparison[period %in% c(-5:5)]
 
 # histogram
 data |> 
+  filter(ratio < 10) |> 
   mutate(period = factor(period, levels=c("5", "4", "3", "2", "1", "0", "-1", "-2", "-3", "-4", "-5")),
          treatment=ifelse(period==0,"Treatment","Control")) |> 
-  ggplot(aes(x = outcome, y = period, fill=treatment)) +
+  ggplot(aes(x = ratio, y = period, fill=treatment)) +
   geom_density_ridges(alpha=0.3, stat = "binline") +
   scale_fill_manual(values=c("grey", "coral")) +
+  geom_vline(xintercept = 1, linetype="dashed", linewidth=1) + 
+  scale_x_continuous(breaks = c(0, 1, 5, 10)) +
   theme_minimal() + 
-  labs(title="Distribution of the number of donors per country",
-       x="Number of donors",
-       y="Period (treatment = 0)")
+  labs(title="Ratio between current and lagged commitments to non-state actors",
+       subtitle = "Ratio < 1 = decrease in annual aid commitments",
+       x="Commitments in period t / Commitments in period t-1",
+       y="Period (treatment = 0)",
+       caption="Remove outliers: ratio > 10")
 
-###########
-## TO DO ##
-###########
+summarize(data,
+          n=length(recipient_id),
+          min=round(min(ratio, na.rm = T), 3),
+          median=round(median(ratio, na.rm = T), 3),
+          mean=round(mean(ratio, na.rm = T), 3),
+          max=round(max(ratio, na.rm = T), 3),
+          .by = period
+          )
 
-ggplot(data, aes(x = diff)) +
-  geom_histogram() +
+summarize(data,
+          min=min(outcome, na.rm = T),
+          median=median(outcome, na.rm = T),
+          mean=mean(outcome, na.rm = T),
+          max=max(outcome, na.rm = T),
+          IQR=IQR(outcome, na.rm = T),
+          sd=sd(outcome, na.rm = T),
+          .by = period
+          )
+
+# lines: absolute value
+data |> 
+  select(recipient_id, outcome, diff, period) |> 
+  fmutate(commit_nonstate = log10(outcome),
+          period = factor(period),
+          treatment = ifelse(period %in% c(-1:0), "Treatment", "Control")
+         ) |> 
+  ggplot(aes(x=period, y=outcome, group=recipient_id)) +
+  geom_vline(xintercept = 0, linetype="dashed", color="slategray4", linewidth=1) +
+  geom_point(color="grey80") +
+  geom_line(aes(color=treatment)) +
+  scale_color_manual(values = c("gray70", "coral")) +
   theme_minimal() +
-  labs(title="Distribution of yearly changes in the number of donors active in affected countries\ntwo periods pre/post-disaster",
-       subtitle="Outlier = Ukraine",
-       x="Number of donors",
-       y="Number of countries")
+  labs(
+    title="Commitments to non-state actors",
+    x="Period (treatment = 0)",
+    y="Commitments (USD, Millions, log10)",
+    color="Treatment status"
+       )
 
-ggbetweenstats(
-  data = filter(data, !recipient_name %in% "Ukraine"), 
-  x = period,
-  y = diff,
-  centrality.plotting = TRUE,
-  bf.message = F,
-  results.subtitle = F,
-  violin.args = list(width = 0, linewidth = 0),
-  xlab = "Period (treatment = 0)",
-  ylab = "Change in the number of donors",
-  title = "Yearly changes in the number of donors active in affected countries\ntwo periods pre/post-disaster",
-  caption = "Removed outlier: Ukraine"
-)
+# Outliers
+# slice_min(data, diff, n=3, by = period) |> filter(period > 0)
+# slice_max(data, diff, n=3, by = period) |> filter(period >= -1)
 
-slice_min(data, diff, n=3, by = period) |> arrange(period)
-slice_max(data, diff, n=3, by = period) |> arrange(period)
+# All panel: commit
+data |> 
+  ggplot(aes(x=period, y=outcome, group=recipient_id)) +
+  geom_vline(xintercept = 0, linetype="dashed", color="coral", linewidth=1) +
+  geom_line() +
+  facet_wrap(~ recipient_name, scales = "free_y") +
+  theme_minimal() +
+  labs(
+    title="Commitments to non-state actors",
+    x="Period (treatment = 0)",
+    y="Commitments (USD, Millions, log10)",
+    color="Treatment status"
+       )
 
 ```
 
-### Sectors
+> Comments: (i) both increasing and decreasing cases, no clear explanation; (ii) some outliers, with stark increase in post-treatment commitments.
 
-```{r sectors}
+#### Share
 
-# select relevant vars
-between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
-  recipient_id, recipient_name,
-  year,
-  outcome = n_sectors,
-  treatment = treat_appeal
-)
-# remove "false" zeroes, i.e., missing obs. due to recipient not registered in crs a period t
-][!is.na(treatment),
-# order observations 
-][order(recipient_id, year),
-# create new variable `period` where treatment year = 0
-][, period := year - year[treatment==1], by = recipient_id
-# create new var `lag1`
-][, lag1 := shift(outcome, type = "lag"), by = recipient_id
-# create new var `diff`
-][, diff := outcome - lag1]
-
-  
-# head(between_periods_comparison)
-
-data <- between_periods_comparison[period %in% c(-2:2)]
-
-# head(data)
-# data |> arrange(-diff)
-
-ggplot(data, aes(x = diff)) +
-  geom_histogram() +
-  theme_minimal() +
-  labs(title="Distribution of yearly changes in the number of active sectors in affected countries\ntwo periods pre/post-disaster",
-       subtitle="Outlier = Micronesia",
-       x="Number of sectors",
-       y="Number of countries")
-
-ggbetweenstats(
-  data = data, 
-  x = period,
-  y = diff,
-  centrality.plotting = TRUE,
-  type = "np",
-  bf.message = F,
-  results.subtitle = F,
-  violin.args = list(width = 0, linewidth = 0),
-  xlab = "Period (treatment = 0)",
-  ylab = "Change in the number of sectors",
-  title = "Yearly changes in the number of active sectors in affected countries\ntwo periods pre/post-disaster"
-)
-
-slice_min(data, diff, n=3, by = period) |> arrange(period)
-slice_max(data, diff, n=3, by = period) |> arrange(period)
-
-```
-
-### Projects
-
-```{r sectors}
-
-# select relevant vars
-between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
-  recipient_id, recipient_name,
-  year,
-  outcome = n_projects,
-  treatment = treat_appeal
-)
-# remove "false" zeroes, i.e., missing obs. due to recipient not registered in crs a period t
-][!is.na(treatment),
-# order observations 
-][order(recipient_id, year),
-# create new variable `period` where treatment year = 0
-][, period := year - year[treatment==1], by = recipient_id
-# create new var `lag1`
-][, lag1 := shift(outcome, type = "lag"), by = recipient_id
-# create new var `diff`
-][, diff := outcome - lag1]
-
-  
-# head(between_periods_comparison)
-
-data <- between_periods_comparison[period %in% c(-2:2)]
-
-# head(data)
-# data |> arrange(-diff)
-
-ggplot(data, aes(x = diff)) +
-  geom_density() +
-  theme_minimal() +
-  labs(title="Distribution of yearly changes in the number of projects in affected countries\ntwo periods pre/post-disaster",
-       x="Number of projects",
-       y="Number of countries")
-
-ggbetweenstats(
-  data = data, 
-  x = period,
-  y = diff,
-  centrality.plotting = TRUE,
-  type="np",
-  bf.message = F,
-  results.subtitle = F,
-  violin.args = list(width = 0, linewidth = 0),
-  xlab = "Period (treatment = 0)",
-  ylab = "Change in the number of projects",
-  title = "Yearly changes in the number of projects in affected countries\ntwo periods pre/post-disaster"
-)
-
-slice_min(data, diff, n=3, by = period) |> arrange(period)
-slice_max(data, diff, n=3, by = period) |> arrange(period)
-
-```
-
-### Size of projects
-
-```{r projects}
-
-# select relevant vars
-between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
-  recipient_id, recipient_name,
-  year,
-  outcome = commit_per_project,
-  treatment = treat_appeal
-)
-# remove "false" zeroes, i.e., missing obs. due to recipient not registered in crs a period t
-][!is.na(treatment),
-# order observations 
-][order(recipient_id, year),
-# create new variable `period` where treatment year = 0
-][, period := year - year[treatment==1], by = recipient_id
-# create new var `lag1`
-][, lag1 := shift(outcome, type = "lag"), by = recipient_id
-# create new var `diff`
-][, diff := outcome - lag1]
-
-  
-# head(between_periods_comparison)
-
-data <- between_periods_comparison[period %in% c(-2:2)]
-
-# head(data)
-# data |> arrange(-diff)
-
-ggplot(data, aes(x = diff)) +
-  geom_density() +
-  theme_minimal() +
-  labs(title="Distribution of yearly changes in the size of projects in affected countries\ntwo periods pre/post-disaster",
-       x="Change in commitments (USD, Millions)",
-       y="Number of countries")
-
-ggbetweenstats(
-  data = data, 
-  x = period,
-  y = diff,
-  centrality.plotting = TRUE,
-  type="np",
-  bf.message = F,
-  results.subtitle = F,
-  violin.args = list(width = 0, linewidth = 0),
-  xlab = "Period (treatment = 0)",
-  ylab = "Change in commitments (USD, Millions)",
-  title = "Yearly changes in the average project size in affected countries\ntwo periods pre/post-disaster"
-)
-
-slice_min(data, diff, n=3, by = period) |> arrange(period)
-slice_max(data, diff, n=3, by = period) |> arrange(period)
-
-```
-
-### Channel of delivery
-
-#### Commitment share
-
-##### Non-state
-
-```{r}
+```{r nonstate}
 
 # select relevant vars
 between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
@@ -502,53 +400,100 @@ between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
 # create new var `lag1`
 ][, lag1 := shift(outcome, type = "lag"), by = recipient_id
 # create new var `diff`
-][, diff := outcome - lag1]
+][, `:=` (
+  diff = outcome - lag1,
+  ratio = outcome / lag1
+  )]
 
-  
 # head(between_periods_comparison)
 
-data <- between_periods_comparison[period %in% c(-2:2)]
+data <- between_periods_comparison[period %in% c(-5:5)]
 
 # head(data)
 # data |> arrange(-diff)
 
+# histogram
 data |> 
-  mutate(period = factor(period, levels=c("2", "1", "0", "-1", "-2"))) |> 
-  ggplot(aes(x = diff, y = period, fill=period)) +
-  ggridges::geom_density_ridges(alpha=.2) +
-  scale_fill_viridis_d() +
-  theme_minimal() + 
-  labs(title="Distribution of annual perc. pt. change in the proportion of commitments channelled through non-state entities\ntwo periods pre/post-disaster",
-       x="Annual % point change")
+  filter(ratio < 20) |> 
+  mutate(period = factor(period, levels=c("5", "4", "3", "2", "1", "0", "-1", "-2", "-3", "-4", "-5")),
+         treatment=ifelse(period==0,"Treatment","Control")) |> 
+  ggplot(aes(x = ratio, y = period, fill=treatment)) +
+  geom_density_ridges(alpha=0.3, stat = "binline") +
+  scale_fill_manual(values=c("grey", "coral")) +
+  geom_vline(xintercept = 1, linetype="dashed", linewidth=1) + 
+  theme_minimal() +
+  labs(title="Ratio between current and lagged proportion of\ncommitments channelled through non-state actors",
+       caption="Removed outliers: ratio > 20")
 
-ggbetweenstats(
-  data = data, 
-  x = period,
-  y = diff,
-  centrality.plotting = TRUE,
-  type="np",
-  bf.message = F,
-  results.subtitle = F,
-  violin.args = list(width = 0, linewidth = 0),
-  xlab = "Period (treatment = 0)",
-  ylab = "% change",
-  title = "Annual percentage point change in the proportion of commitments channelled through non-state entities\ntwo periods pre/post-disaster"
-)
+summarize(data,
+          n=length(recipient_id),
+          min=round(min(ratio, na.rm = T), 3),
+          median=round(median(ratio, na.rm = T), 3),
+          mean=round(mean(ratio, na.rm = T), 3),
+          max=round(max(ratio, na.rm = T), 3),
+          .by = period
+          )
 
-slice_min(data, diff, n=3, by = period) |> arrange(period)
-slice_max(data, diff, n=3, by = period) |> arrange(period)
+summarize(data,
+          min=min(outcome, na.rm = T),
+          median=median(outcome, na.rm = T),
+          mean=mean(outcome, na.rm = T),
+          max=max(outcome, na.rm = T),
+          IQR=IQR(outcome, na.rm = T),
+          sd=sd(outcome, na.rm = T),
+          .by = period
+          )
+
+# lines: absolute value
+data |> 
+  select(recipient_id, outcome, diff, period) |> 
+  fmutate(commit_nonstate = log10(outcome),
+          period = factor(period),
+          treatment = ifelse(period %in% c(-1:0), "Treatment", "Control")
+         ) |> 
+  ggplot(aes(x=period, y=outcome, group=recipient_id)) +
+  geom_vline(xintercept = 0, linetype="dashed", color="slategray4", linewidth=1) +
+  geom_point(color="grey80") +
+  geom_line(aes(color=treatment)) +
+  scale_color_manual(values = c("gray70", "coral")) +
+  theme_minimal() +
+  labs(
+    title="Commitments to non-state actors",
+    x="Period (treatment = 0)",
+    y="Commitments (USD, Millions, log10)",
+    color="Treatment status"
+       )
+
+# Outliers
+# slice_min(data, diff, n=3, by = period) |> filter(period > 0)
+# slice_max(data, diff, n=3, by = period) |> filter(period >= -1)
+
+# All panel
+data |> 
+  ggplot(aes(x=period, y=outcome, group=recipient_id)) +
+  geom_vline(xintercept = 0, linetype="dashed", color="coral", linewidth=1) +
+  geom_line() +
+  facet_wrap(~ recipient_name, scales = "free_y") +
+  theme_minimal() +
+  labs(
+    title="Commitments to non-state actors",
+    x="Period (treatment = 0)",
+    y="Commitments (USD, Millions, log10)",
+    color="Treatment status"
+       )
 
 ```
+> Comments: (i) significant increase in commitments to non-state actors in post-treatment periods; (ii) post-treatment, the proportion seems to increase over time.
 
-##### Non-state NGO
+## Donors
 
-```{r}
+```{r n_donors}
 
 # select relevant vars
 between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
   recipient_id, recipient_name,
   year,
-  outcome = sh_commit.channel_nonstate_ngo,
+  outcome = n_donors,
   treatment = treat_appeal
 )
 # remove "false" zeroes, i.e., missing obs. due to recipient not registered in crs a period t
@@ -560,53 +505,93 @@ between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
 # create new var `lag1`
 ][, lag1 := shift(outcome, type = "lag"), by = recipient_id
 # create new var `diff`
-][, diff := outcome - lag1]
+][, `:=` (
+  diff = outcome - lag1,
+  ratio = outcome / lag1
+  )]
 
-  
 # head(between_periods_comparison)
 
-data <- between_periods_comparison[period %in% c(-2:2)]
+data <- between_periods_comparison[period %in% c(-5:5)]
 
 # head(data)
 # data |> arrange(-diff)
 
+# histogram
 data |> 
-  mutate(period = factor(period, levels=c("2", "1", "0", "-1", "-2"))) |> 
-  ggplot(aes(x = diff, y = period, fill=period)) +
-  ggridges::geom_density_ridges(alpha=.2) +
-  scale_fill_viridis_d() +
-  theme_minimal() + 
-  labs(title="Distribution of annual perc. pt. change in the proportion of commitments channelled through NGOs\ntwo periods pre/post-disaster",
-       x="Annual % point change")
+  mutate(period = factor(period, levels=c("5", "4", "3", "2", "1", "0", "-1", "-2", "-3", "-4", "-5")),
+         treatment=ifelse(period==0,"Treatment","Control")) |> 
+  ggplot(aes(x = ratio, y = period, fill=treatment)) +
+  geom_density_ridges(alpha=0.3, stat = "binline") +
+  scale_fill_manual(values=c("grey", "coral")) +
+  geom_vline(xintercept = 1, linetype="dashed", linewidth=1) + 
+  theme_minimal()
 
-ggbetweenstats(
-  data = data, 
-  x = period,
-  y = diff,
-  centrality.plotting = TRUE,
-  type="np",
-  bf.message = F,
-  results.subtitle = F,
-  violin.args = list(width = 0, linewidth = 0),
-  xlab = "Period (treatment = 0)",
-  ylab = "% change",
-  title = "Annual percentage point change\nin the proportion of commitments channelled through NGOs"
-)
+summarize(data,
+          n=length(recipient_id),
+          min=round(min(ratio, na.rm = T), 3),
+          median=round(median(ratio, na.rm = T), 3),
+          mean=round(mean(ratio, na.rm = T), 3),
+          max=round(max(ratio, na.rm = T), 3),
+          .by = period
+          )
 
-slice_min(data, diff, n=3, by = period) |> arrange(period)
-slice_max(data, diff, n=3, by = period) |> arrange(period)
+summarize(data,
+          min=min(outcome, na.rm = T),
+          median=median(outcome, na.rm = T),
+          mean=mean(outcome, na.rm = T),
+          max=max(outcome, na.rm = T),
+          IQR=IQR(outcome, na.rm = T),
+          sd=sd(outcome, na.rm = T),
+          .by = period
+          )
+
+# lines: absolute value
+data |> 
+  select(recipient_id, outcome, diff, period) |> 
+  fmutate(
+          period = factor(period),
+          treatment = ifelse(period %in% c(-1:0), "Treatment", "Control")
+         ) |> 
+  ggplot(aes(x=period, y=outcome, group=recipient_id)) +
+  geom_vline(xintercept = 0, linetype="dashed", color="slategray4", linewidth=1) +
+  geom_point(color="grey80") +
+  geom_line(aes(color=treatment)) +
+  scale_color_manual(values = c("gray70", "coral")) +
+  theme_minimal() +
+  labs(
+    title="Number of donors",
+    x="Period (treatment = 0)",
+    y="# donors",
+    color="Treatment status"
+       )
+
+data |> 
+  ggplot(aes(x=period, y=outcome, group=recipient_id)) +
+  geom_vline(xintercept = 0, linetype="dashed", color="coral", linewidth=1) +
+  geom_line() +
+  facet_wrap(~ recipient_name, scales = "free_y") +
+  theme_minimal() +
+  labs(
+    title="Number of donors",
+    x="Period (treatment = 0)",
+    y="# donors",
+    color="Treatment status"
+       )
 
 ```
 
+> Comments: (i) no significant change in median/mean; (ii) maximum number of donors increase in t=1 and t=2, which increase the variance.
 
+## Sectors
 
-```{r}
+```{r n_sectors}
 
 # select relevant vars
 between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
   recipient_id, recipient_name,
   year,
-  outcome = wght_prop_channel_nonstate,
+  outcome = n_sectors,
   treatment = treat_appeal
 )
 # remove "false" zeroes, i.e., missing obs. due to recipient not registered in crs a period t
@@ -618,103 +603,454 @@ between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
 # create new var `lag1`
 ][, lag1 := shift(outcome, type = "lag"), by = recipient_id
 # create new var `diff`
-][, diff := outcome - lag1]
+][, `:=` (
+  diff = outcome - lag1,
+  ratio = outcome / lag1
+  )]
 
-  
 # head(between_periods_comparison)
 
-data <- between_periods_comparison[period %in% c(-2:2)]
+data <- between_periods_comparison[period %in% c(-5:5)]
 
 # head(data)
 # data |> arrange(-diff)
 
+# histogram
 data |> 
-  mutate(period = factor(period, levels=c("2", "1", "0", "-1", "-2"))) |> 
-  ggplot(aes(x = diff, y = period, fill=period)) +
-  ggridges::geom_density_ridges(alpha=.2) +
-  scale_fill_viridis_d() +
-  theme_minimal() + 
-  labs(title="Distribution of yearly changes in the share of commitments through non-state channels in affected countries\ntwo periods pre/post-disaster",
-       x="% change",
-       y="Number of countries")
+  filter(ratio < 2) |> 
+  mutate(period = factor(period, levels=c("5", "4", "3", "2", "1", "0", "-1", "-2", "-3", "-4", "-5")),
+         treatment=ifelse(period==0,"Treatment","Control")) |> 
+  ggplot(aes(x = outcome, y = period, fill=treatment)) +
+  geom_density_ridges(alpha=0.3, stat = "binline") +
+  scale_fill_manual(values=c("grey", "coral")) +
+  theme_minimal()
 
-ggbetweenstats(
-  data = data, 
-  x = period,
-  y = diff,
-  centrality.plotting = TRUE,
-  type="np",
-  bf.message = F,
-  results.subtitle = F,
-  violin.args = list(width = 0, linewidth = 0),
-  xlab = "Period (treatment = 0)",
-  ylab = "% change",
-  title = "Yearly change in the share of commitments through non-state channels in affected countries\ntwo periods pre/post-disaster"
-)
+summarize(data,
+          n=length(recipient_id),
+          min=round(min(ratio, na.rm = T), 3),
+          median=round(median(ratio, na.rm = T), 3),
+          mean=round(mean(ratio, na.rm = T), 3),
+          max=round(max(ratio, na.rm = T), 3),
+          .by = period
+          )
 
-slice_min(data, diff, n=3, by = period) |> arrange(period)
-slice_max(data, diff, n=3, by = period) |> arrange(period)
+summarize(data,
+          min=min(outcome, na.rm = T),
+          median=median(outcome, na.rm = T),
+          mean=mean(outcome, na.rm = T),
+          max=max(outcome, na.rm = T),
+          IQR=IQR(outcome, na.rm = T),
+          sd=sd(outcome, na.rm = T),
+          .by = period
+          )
+
+# lines: absolute value
+data |> 
+  select(recipient_id, outcome, diff, period) |> 
+  fmutate(
+          period = factor(period),
+          treatment = ifelse(period %in% c(-1:0), "Treatment", "Control")
+         ) |> 
+  ggplot(aes(x=period, y=outcome, group=recipient_id)) +
+  geom_vline(xintercept = 0, linetype="dashed", color="slategray4", linewidth=1) +
+  geom_point(color="grey80") +
+  geom_line(aes(color=treatment)) +
+  scale_color_manual(values = c("gray70", "coral")) +
+  theme_minimal() +
+  labs(
+    title="Number of sectors",
+    x="Period (treatment = 0)",
+    y="# sectors",
+    color="Treatment status"
+       )
+
+data |> 
+  ggplot(aes(x=period, y=outcome, group=recipient_id)) +
+  geom_vline(xintercept = 0, linetype="dashed", color="coral", linewidth=1) +
+  geom_line() +
+  facet_wrap(~ recipient_name, scales = "free_y") +
+  theme_minimal() +
+  labs(
+    title="Number of sectors",
+    x="Period (treatment = 0)",
+    y="# sectors",
+    color="Treatment status"
+       )
 
 ```
 
+## Purposes
 
-## Unit-level: recipient-sector-year
+```{r n_sectors}
+
+# select relevant vars
+between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
+  recipient_id, recipient_name,
+  year,
+  outcome = n_purpose,
+  treatment = treat_appeal
+)
+# remove "false" zeroes, i.e., missing obs. due to recipient not registered in crs a period t
+][!is.na(treatment),
+# order observations 
+][order(recipient_id, year),
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = recipient_id
+# create new var `lag1`
+][, lag1 := shift(outcome, type = "lag"), by = recipient_id
+# create new var `diff`
+][, `:=` (
+  diff = outcome - lag1,
+  ratio = outcome / lag1
+  )]
+
+# head(between_periods_comparison)
+
+data <- between_periods_comparison[period %in% c(-5:5)]
+
+# head(data)
+# data |> arrange(-diff)
+
+# histogram
+data |> 
+  filter(ratio < 2) |> 
+  mutate(period = factor(period, levels=c("5", "4", "3", "2", "1", "0", "-1", "-2", "-3", "-4", "-5")),
+         treatment=ifelse(period==0,"Treatment","Control")) |> 
+  ggplot(aes(x = outcome, y = period, fill=treatment)) +
+  geom_density_ridges(alpha=0.3, stat = "binline") +
+  scale_fill_manual(values=c("grey", "coral")) +
+  theme_minimal()
+
+summarize(data,
+          n=length(recipient_id),
+          min=round(min(ratio, na.rm = T), 3),
+          median=round(median(ratio, na.rm = T), 3),
+          mean=round(mean(ratio, na.rm = T), 3),
+          max=round(max(ratio, na.rm = T), 3),
+          .by = period
+          )
+
+summarize(data,
+          min=min(outcome, na.rm = T),
+          median=median(outcome, na.rm = T),
+          mean=mean(outcome, na.rm = T),
+          max=max(outcome, na.rm = T),
+          IQR=IQR(outcome, na.rm = T),
+          sd=sd(outcome, na.rm = T),
+          .by = period
+          )
+
+# lines: absolute value
+data |> 
+  select(recipient_id, outcome, diff, period) |> 
+  fmutate(
+          period = factor(period),
+          treatment = ifelse(period %in% c(-1:0), "Treatment", "Control")
+         ) |> 
+  ggplot(aes(x=period, y=outcome, group=recipient_id)) +
+  geom_vline(xintercept = 0, linetype="dashed", color="slategray4", linewidth=1) +
+  geom_point(color="grey80") +
+  geom_line(aes(color=treatment)) +
+  scale_color_manual(values = c("gray70", "coral")) +
+  theme_minimal() +
+  labs(
+    title="Number of purposes",
+    x="Period (treatment = 0)",
+    y="# purposes",
+    color="Treatment status"
+       )
+
+data |> 
+  ggplot(aes(x=period, y=outcome, group=recipient_id)) +
+  geom_vline(xintercept = 0, linetype="dashed", color="coral", linewidth=1) +
+  geom_line() +
+  facet_wrap(~ recipient_name, scales = "free_y") +
+  theme_minimal() +
+  labs(
+    title="Number of purposes",
+    x="Period (treatment = 0)",
+    y="# purposes",
+    color="Treatment status"
+       )
+
+```
+
+## Projects
+
+### Number
+
+```{r n_projects}
+
+# select relevant vars
+between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
+  recipient_id, recipient_name,
+  year,
+  outcome = n_projects,
+  treatment = treat_appeal
+)
+# remove "false" zeroes, i.e., missing obs. due to recipient not registered in crs a period t
+][!is.na(treatment),
+# order observations 
+][order(recipient_id, year),
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = recipient_id
+# create new var `lag1`
+][, lag1 := shift(outcome, type = "lag"), by = recipient_id
+# create new var `diff`
+][, `:=` (
+  diff = outcome - lag1,
+  ratio = outcome / lag1
+  )]
+
+# head(between_periods_comparison)
+
+data <- between_periods_comparison[period %in% c(-5:5)]
+
+# head(data)
+# data |> arrange(-diff)
+
+# histogram
+data |> 
+  filter(ratio < 2) |> 
+  mutate(period = factor(period, levels=c("5", "4", "3", "2", "1", "0", "-1", "-2", "-3", "-4", "-5")),
+         treatment=ifelse(period==0,"Treatment","Control")) |> 
+  ggplot(aes(x = outcome, y = period, fill=treatment)) +
+  geom_density_ridges(alpha=0.3, stat = "binline") +
+  scale_fill_manual(values=c("grey", "coral")) +
+  geom_vline(xintercept = 1, linetype="dashed", linewidth=1) + 
+  theme_minimal() +
+  labs(x="# of projects")
+
+summarize(data,
+          n=length(recipient_id),
+          min=round(min(ratio, na.rm = T), 3),
+          median=round(median(ratio, na.rm = T), 3),
+          mean=round(mean(ratio, na.rm = T), 3),
+          max=round(max(ratio, na.rm = T), 3),
+          .by = period
+          )
+
+summarize(data,
+          min=min(outcome, na.rm = T),
+          median=median(outcome, na.rm = T),
+          mean=mean(outcome, na.rm = T),
+          max=max(outcome, na.rm = T),
+          IQR=IQR(outcome, na.rm = T),
+          sd=sd(outcome, na.rm = T),
+          .by = period
+          )
+
+# lines: absolute value
+data |> 
+  select(recipient_id, outcome, diff, period) |> 
+  fmutate(
+          period = factor(period),
+          treatment = ifelse(period %in% c(-1:0), "Treatment", "Control")
+         ) |> 
+  ggplot(aes(x=period, y=outcome, group=recipient_id)) +
+  geom_vline(xintercept = 0, linetype="dashed", color="slategray4", linewidth=1) +
+  geom_point(color="grey80") +
+  geom_line(aes(color=treatment)) +
+  scale_color_manual(values = c("gray70", "coral")) +
+  theme_minimal() +
+  labs(
+    title="Number of projects",
+    x="Period (treatment = 0)",
+    y="# projects",
+    color="Treatment status"
+       )
+
+data |> 
+  ggplot(aes(x=period, y=outcome, group=recipient_id)) +
+  geom_vline(xintercept = 0, linetype="dashed", color="coral", linewidth=1) +
+  geom_line() +
+  facet_wrap(~ recipient_name, scales = "free_y") +
+  theme_minimal() +
+  labs(
+    title="Number of projects",
+    x="Period (treatment = 0)",
+    y="# projects",
+    color="Treatment status"
+       )
+
+```
+
+### Size
+
+```{r size_projects}
+
+# select relevant vars
+between_periods_comparison <- data_recip.appeal.binary_single_treatment[, .(
+  recipient_id, recipient_name,
+  year,
+  outcome = commit_per_project,
+  treatment = treat_appeal
+)
+# remove "false" zeroes, i.e., missing obs. due to recipient not registered in crs a period t
+][!is.na(treatment),
+# order observations 
+][order(recipient_id, year),
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = recipient_id
+# create new var `lag1`
+][, lag1 := shift(outcome, type = "lag"), by = recipient_id
+# create new var `diff`
+][, `:=` (
+  diff = outcome - lag1,
+  ratio = outcome / lag1
+  )]
+
+# head(between_periods_comparison)
+
+data <- between_periods_comparison[period %in% c(-5:5)]
+
+# head(data)
+# data |> arrange(-diff)
+
+## LEVELS
+# histogram
+data |> 
+  mutate(period = factor(period, levels=c("5", "4", "3", "2", "1", "0", "-1", "-2", "-3", "-4", "-5")),
+         treatment=ifelse(period==0,"Treatment","Control")) |> 
+  ggplot(aes(x = outcome, y = period, fill=treatment)) +
+  geom_density_ridges(alpha=0.3) +
+  scale_fill_manual(values=c("grey", "coral")) +
+  theme_minimal() +
+  labs(
+    title="Project sizes",
+    x="Commitment per project"
+    )
+# table
+summarize(data,
+          min=min(outcome, na.rm = T),
+          median=median(outcome, na.rm = T),
+          mean=mean(outcome, na.rm = T),
+          max=max(outcome, na.rm = T),
+          IQR=IQR(outcome, na.rm = T),
+          sd=sd(outcome, na.rm = T),
+          .by = period
+          )
+
+## VARIATIONS
+# table
+summarize(data,
+          n=length(recipient_id),
+          min=round(min(ratio, na.rm = T), 3),
+          median=round(median(ratio, na.rm = T), 3),
+          mean=round(mean(ratio, na.rm = T), 3),
+          max=round(max(ratio, na.rm = T), 3),
+          .by = period
+          )
+
+# All panel
+data |> 
+  ggplot(aes(x=period, y=outcome, group=recipient_id)) +
+  geom_vline(xintercept = 0, linetype="dashed", color="coral", linewidth=1) +
+  geom_line() +
+  facet_wrap(~ recipient_name, scales = "free_y") +
+  theme_minimal() +
+  labs(
+    title="Project sizes",
+    x="Period (treatment = 0)",
+    y="Commitments per project (USD, Millions)",
+    color="Treatment status"
+       )
+
+```
+
+```{r}
+# bivariate
+# x=ratio commitments, y=ratio % nonstate, by=period
+
+# select relevant vars
+data <- data_recip.appeal.binary_single_treatment[, .(
+  recipient_id, recipient_name,
+  year,
+  commit, sh_commit.channel_nonstate, 
+  treatment = treat_appeal
+)
+# remove "false" zeroes, i.e., missing obs. due to recipient not registered in crs a period t
+][!is.na(treatment),
+# order observations 
+][order(recipient_id, year),
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = recipient_id
+# create new var `lag1`
+][, `:=` (
+  lag1.commit = shift(commit, type = "lag"),
+  lag1.sh_nonstate = shift(sh_commit.channel_nonstate, type = "lag")
+), by = recipient_id
+# create new var `diff`
+][, `:=` (
+  ratio.commit = commit / lag1.commit,
+  ratio.sh_nonstate = sh_commit.channel_nonstate / lag1.sh_nonstate
+  )
+][period %in% c(-5:5)]
+
+data
+
+data |> 
+  filter(ratio.commit < 5) |> 
+  filter(ratio.sh_nonstate < 5) |>
+  ggplot(aes(x=ratio.sh_nonstate, y=ratio.commit)) +
+  geom_point() +
+  geom_smooth(method = 'gam', se = TRUE) +
+  geom_vline(xintercept = 1, linetype="dashed") +
+  geom_hline(yintercept = 1, linetype="dashed") +
+  facet_wrap(~ period) +
+  theme_minimal()
+
+```
+
+> Comment: small negative relationship between the variations of overall commitments and the share of commitments going to nonstate actors, i.e. increase in the volume of commitments leads to a decrease in the share of commitments to nonstate actors.
+
+# Unit-level: donor-recipient-year
 
 ```{r}
 
-## UNIT-LEVEL: recipient-year
-sample_recipient <- data_crs |> 
-  expand(nesting(recipient_id, recipient_name, cohort_recipient), nesting(sector_id, sector_name), year) |> 
+## UNIT-LEVEL: donor-recipient-year
+sample_dyad <- data_crs |> 
+  expand(nesting(donor_id, donor_name, cohort_donor),
+         nesting(recipient_id, recipient_name, cohort_recipient), 
+         year) |> 
   filter(!grepl("regional", recipient_name)) |> # remove "regional" recipients
-  fmutate(universe = ifelse(cohort_recipient <= year, 1, 0)) |> 
+  fmutate(universe = ifelse(cohort_donor <= year & cohort_recipient <= year, 1, 0)) |> # 
   setDT()
 
 ## OECD CRS (outcome variables)
 # select vars
-data_recip.outcomes <- data_crs[, .(year, recipient_id, donor_id, donor_name, sector_id, sector_name, crs_id, usd_commitment_defl, channel_nonstate, channel_nonstate_ngo, channel_nonstate_multi, n_projects)
+data_dyad.outcomes <- data_crs[, .(year, donor_id, donor_name, recipient_name, recipient_id, sector_id, sector_name, purpose_id = purpose_code, purpose_name, crs_id, usd_commitment_defl, channel_nonstate, channel_nonstate_ngo, channel_nonstate_multi, n_projects)
 # summarize to get unit-level: recipient-year
 ][, .(
   commit = sum(usd_commitment_defl, na.rm = T),
-  n_donors = uniqueN(donor_id[usd_commitment_defl != 0]),
   n_sectors = uniqueN(sector_id[usd_commitment_defl != 0]),
-  n_projects = uniqueN(crs_id, na.rm = T)
-), .(recipient_id, year)
-][order(recipient_id, year)
+  n_purpose = uniqueN(purpose_id[usd_commitment_defl != 0]),
+  n_projects = uniqueN(crs_id, na.rm = T),
+  commit.channel_nonstate = sum(usd_commitment_defl[channel_nonstate=="1"], na.rm = T),
+  commit.channel_nonstate_ngo = sum(usd_commitment_defl[channel_nonstate_ngo=="1"], na.rm = T),
+  commit.channel_nonstate_multi = sum(usd_commitment_defl[channel_nonstate_multi=="1"], na.rm = T),
+  sh_commit.channel_nonstate = sum(usd_commitment_defl[channel_nonstate=="1"], na.rm = T)/
+                               sum(usd_commitment_defl, na.rm = T)*100,
+  sh_commit.channel_nonstate_ngo = sum(usd_commitment_defl[channel_nonstate_ngo=="1"], na.rm = T)/
+                               sum(usd_commitment_defl, na.rm = T)*100,
+  sh_commit.channel_nonstate_multi = sum(usd_commitment_defl[channel_nonstate_multi=="1"], na.rm = T)/
+                               sum(usd_commitment_defl, na.rm = T)*100,
+  sh_proj.channel_nonstate = n_distinct(crs_id[channel_nonstate=="1"])/n_distinct(crs_id)*100,
+  sh_proj.channel_nonstate_ngo = n_distinct(crs_id[channel_nonstate_ngo=="1"])/n_distinct(crs_id)*100,
+  sh_proj.channel_nonstate_multi = n_distinct(crs_id[channel_nonstate_multi=="1"])/n_distinct(crs_id)*100
+), .(donor_id, recipient_id, year)
+][order(donor_id, recipient_id, year)
 # add var on commitment per projects in recipient countries per year
 ][, commit_per_project := commit / n_projects]
 
 # merge outcome data
-data_outcomes <- merge(sample_recipient, data_recip.outcomes, by=c("recipient_id", "year"), all.x = TRUE) %>%
+data_outcomes <- merge(sample_dyad, data_dyad.outcomes, 
+                       by=c("donor_id", "recipient_id", "year"), 
+                       all.x = TRUE) %>%
   arrange(recipient_id, year) %>%
   mutate(across(commit:commit_per_project, 
                 ~ ifelse(universe == 1 & is.na(.), 0, .)))
   
-
-## EM-DAT (treatment)
-# select vars of interest
-data.binary_treatment <- data_emdat[, .(recipient_id, 
-                                        year = start_year, 
-                                        clim_event, 
-                                        treatment_all = switching_event_dummy, 
-                                        treatment_appeal = switching_appeal_dummy)]
-
-# filter for weather and climate events
-data_treatment <- data.binary_treatment[clim_event == 1
-# summarize to get unit-level: recipient-year
-][, .(
-  treat_all = max(treatment_all, na.rm = T),
-  treat_appeal = max(treatment_appeal, na.rm = T)
-), by = .(recipient_id, year)]
-
-# merge treatment data
-data_recip.binary_treatment <- merge(data_outcomes, data_treatment, 
-                                            by=c("recipient_id", "year"), 
-                                            all.x = T) |> 
-  mutate(across(starts_with("treat"), 
-                ~ ifelse(universe == 1 & is.na(.), 0, .)),
-         across(starts_with("treat"), 
-                ~ ifelse(universe == 0, NA, .))
-  )
-
 ```
+
 
