@@ -63,17 +63,21 @@ data_outcomes <- merge(sample_recipient, data_recip.outcomes, by=c("recipient_id
 ## Switching treatment only
 
 ```{r}
-
 ## EM-DAT (treatment)
 # select vars of interest
-data.binary_treatment <- data_emdat[, .(recipient_id, 
+recip_binary_treatment <- data_emdat[, .(recipient_id, 
                                         year = start_year, 
                                         clim_event, 
                                         treatment_all = switching_event_dummy, 
                                         treatment_appeal = switching_appeal_dummy)]
+```
+
+## Climate-related events only
+
+```{r}
 
 # filter for weather and climate events
-data_treatment <- data.binary_treatment[clim_event == 1
+recip_binary_climate_treatment <- recip_binary_treatment[clim_event == 1
 # summarize to get unit-level: recipient-year
 ][, .(
   treat_all = max(treatment_all, na.rm = T),
@@ -87,7 +91,7 @@ data_treatment <- data.binary_treatment[clim_event == 1
 ```{r}
 
 # merge treatment data
-data_recip.binary_treatment <- merge(data_outcomes, data_treatment, 
+data_recip.binary_treatment <- merge(data_outcomes, recip_binary_climate_treatment, 
                                             by=c("recipient_id", "year"), 
                                             all.x = T) |> 
   mutate(across(starts_with("treat"), 
@@ -144,6 +148,8 @@ data_recip.appeal.binary_single_treatment <- data_recip.binary_treatment[recipie
 
 # list single treated recipients
 unique(data_recip.appeal.binary_single_treatment$recipient_name)
+
+recip_binary_climate_treatment
 ```
 
 ### Treatment status
@@ -167,7 +173,7 @@ panelView::panelview(1 ~ treat_appeal, #
 
 ## Commitments
 
-### All
+### Total
 
 ```{r commitments}
 
@@ -1009,6 +1015,7 @@ data |>
 ```{r}
 
 ## UNIT-LEVEL: donor-recipient-year
+# Define full sample
 sample_dyad <- data_crs |> 
   expand(nesting(donor_id, donor_name, cohort_donor),
          nesting(recipient_id, recipient_name, cohort_recipient), 
@@ -1019,38 +1026,217 @@ sample_dyad <- data_crs |>
 
 ## OECD CRS (outcome variables)
 # select vars
-data_dyad.outcomes <- data_crs[, .(year, donor_id, donor_name, recipient_name, recipient_id, sector_id, sector_name, purpose_id = purpose_code, purpose_name, crs_id, usd_commitment_defl, channel_nonstate, channel_nonstate_ngo, channel_nonstate_multi, n_projects)
-# summarize to get unit-level: recipient-year
-][, .(
-  commit = sum(usd_commitment_defl, na.rm = T),
-  n_sectors = uniqueN(sector_id[usd_commitment_defl != 0]),
-  n_purpose = uniqueN(purpose_id[usd_commitment_defl != 0]),
-  n_projects = uniqueN(crs_id, na.rm = T),
+data_dyad.vars <- data_crs[, .(year, donor_id, recipient_id, sector_id, sector_name, purpose_id = purpose_code, purpose_name, crs_id, usd_commitment_defl, channel_nonstate, channel_nonstate_ngo, channel_nonstate_multi, n_projects)]
+# descriptive stats
+summary(data_dyad.outcomes)
+# check for negative commitments
+data_dyad.vars |> 
+  filter(usd_commitment_defl < 0)  # 173 obs. have negative commitments
+#  distinct(donor_id) |>  # from 5 donors
+#  distinct(recipient_id) # from 65 recipients
+
+# summarize to get unit-level: donor-recipient-year
+data_dyad.outcomes <- data_dyad.vars[, .(
+# Intensive margin  
+# Total commitments
+  commitment = sum(usd_commitment_defl, na.rm = T),
+# Commitments by channel type  
   commit.channel_nonstate = sum(usd_commitment_defl[channel_nonstate=="1"], na.rm = T),
   commit.channel_nonstate_ngo = sum(usd_commitment_defl[channel_nonstate_ngo=="1"], na.rm = T),
   commit.channel_nonstate_multi = sum(usd_commitment_defl[channel_nonstate_multi=="1"], na.rm = T),
-  sh_commit.channel_nonstate = sum(usd_commitment_defl[channel_nonstate=="1"], na.rm = T)/
-                               sum(usd_commitment_defl, na.rm = T)*100,
-  sh_commit.channel_nonstate_ngo = sum(usd_commitment_defl[channel_nonstate_ngo=="1"], na.rm = T)/
-                               sum(usd_commitment_defl, na.rm = T)*100,
-  sh_commit.channel_nonstate_multi = sum(usd_commitment_defl[channel_nonstate_multi=="1"], na.rm = T)/
-                               sum(usd_commitment_defl, na.rm = T)*100,
-  sh_proj.channel_nonstate = n_distinct(crs_id[channel_nonstate=="1"])/n_distinct(crs_id)*100,
-  sh_proj.channel_nonstate_ngo = n_distinct(crs_id[channel_nonstate_ngo=="1"])/n_distinct(crs_id)*100,
-  sh_proj.channel_nonstate_multi = n_distinct(crs_id[channel_nonstate_multi=="1"])/n_distinct(crs_id)*100
+# Extensive margin
+  n_sector = uniqueN(sector_id[usd_commitment_defl > 0]),
+  n_purpose = uniqueN(purpose_id[usd_commitment_defl > 0]),
+  n_projects = uniqueN(crs_id[usd_commitment_defl > 0], na.rm = T)
 ), .(donor_id, recipient_id, year)
-][order(donor_id, recipient_id, year)
-# add var on commitment per projects in recipient countries per year
-][, commit_per_project := commit / n_projects]
+][, size_projects := ifelse(commitment > 0, commitment / n_projects, 0)] # Size of projects
 
-# merge outcome data
+data_dyad.outcomes |> 
+  filter(commitment < 0)
+# Note: once aggregated at the donor-recipient dyad level, there is only one observation with a small negative commitments
+
+
+## MERGE full sample with outcome variables
 data_outcomes <- merge(sample_dyad, data_dyad.outcomes, 
                        by=c("donor_id", "recipient_id", "year"), 
-                       all.x = TRUE) %>%
-  arrange(recipient_id, year) %>%
-  mutate(across(commit:commit_per_project, 
-                ~ ifelse(universe == 1 & is.na(.), 0, .)))
-  
+                       all.x = TRUE) |> 
+  arrange(recipient_id, year) |> 
+  mutate(across(starts_with("commit"), ~ ifelse(. < 0, 0, .))) |> # one obs. has negative commitments (-0.31), convert to zero 
+  mutate(across(starts_with("commit"), ~ ifelse(universe == 1 & is.na(.), 0, .))) |> # specify "real" zeroes, i.e., null values for existing dyads
+  select(-starts_with("cohort"))
+
+summary(data_outcomes)
+
+data_outcomes |> 
+  slice_min(n_purpose, n=5)
+
 ```
 
+# Treatment status
+
+## Switching and unique treatment only
+
+```{r}
+# Treatmant
+data_treatment <- data_recip.appeal.binary_single_treatment[, .(recipient_id, year, treat_all, treat_appeal)]
+
+data_treatment <- rename(data_treatment, treatment = treat_appeal)
+
+summary(data_treatment)
+
+```
+
+# Outcome variables
+
+```{r}
+# Merge outcomes with treatment data
+# remove 
+data_dyad <- merge(data_outcomes, data_treatment, by = c("recipient_id", "year"), all.x = T)[order(recipient_id, donor_id, year),][!is.na(treatment),]
+
+summary(data_dyad)
+```
+
+## Commitments
+
+### Total
+
+```{r commitments}
+
+# create new vars for relative perioding (period) and lags (lag1)
+between_periods_comparison <- copy(data_dyad)
+between_periods_comparison <- between_periods_comparison[, .(donor_id, donor_name, recipient_id, recipient_name, year, commitment, treatment) 
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = .(donor_id, recipient_id)
+# create new var `lag1`
+][order(recipient_id, donor_id, year),
+][, lag1 := shift(commitment, type = "lag"), by = .(donor_id, recipient_id)
+# create new var `diff`
+][, `:=` (
+  diff = commitment - lag1,
+  ratio = ifelse(commitment > 0 & lag1 > 0, commitment / lag1, NA)
+)]
+
+data <- between_periods_comparison[period %in% c(-5:5)]
+
+# Level trend (commitment)
+
+data_sample <- data |> 
+  select(donor_id, recipient_id, commitment, period) |> 
+  fmutate(period = factor(period),
+          group = paste(donor_id, recipient_id, sep = "_"))
+#  filter(uniqueN(period) == 5, .by = group)
+
+summarize(data_sample,
+          share_zeroes = round(sum(commitment==0, na.rm = T) / length(commitment) * 100, 2),
+          .by = period)
+
+summarize(data_sample[commitment > 0,],
+    N = uniqueN(group),
+    min = min(commitment, na.rm = T),
+    Q1 = quantile(commitment, probs = .25, na.rm = T),
+    median = median(commitment, na.rm = T), 
+    mean = mean(commitment, na.rm = T),
+    Q3 = quantile(commitment, .75, na.rm = T),
+    max = max(commitment, na.rm = T),
+    .by = period)
+  
+# Dynamic trend (ratio, diff)
+
+```
+
+### Non-State
+
+```{r}
+ 
+# create new vars for relative perioding (period) and lags (lag1)
+between_periods_comparison <- copy(data_dyad)
+between_periods_comparison <- between_periods_comparison[, .(donor_id, donor_name, 
+                                                             recipient_id, recipient_name, 
+                                                             year, 
+                                                             outcome = commit.channel_nonstate, 
+                                                             treatment)
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = .(donor_id, recipient_id)
+# create new var `lag1`
+][order(recipient_id, donor_id, year),
+][, lag1 := shift(outcome, type = "lag"), by = .(donor_id, recipient_id)
+# create new var `diff`
+][, `:=` (
+  diff = outcome - lag1,
+  ratio = ifelse(outcome > 0 & lag1 > 0, outcome / lag1, NA)
+)]
+
+data <- between_periods_comparison[period %in% c(-5:5)]
+
+data |> 
+  filter(lag1 > 1) |> 
+  slice_max(ratio, n=5)
+
+# Level trend (commitment)
+
+data_sample <- data |> 
+  select(donor_id, recipient_id, outcome, period) |> 
+  fmutate(period = factor(period),
+          group = paste(donor_id, recipient_id, sep = "_"))
+#  filter(uniqueN(period) == 5, .by = group)
+
+summarize(data_sample,
+          share_zeroes = round(sum(outcome==0, na.rm = T) / length(outcome) * 100, 2),
+          .by = period)
+
+summarize(data_sample[outcome > 0,],
+    N = uniqueN(group),
+    min = min(outcome, na.rm = T),
+    Q1 = quantile(outcome, probs = .25, na.rm = T),
+    median = median(outcome, na.rm = T), 
+    mean = mean(outcome, na.rm = T),
+    Q3 = quantile(outcome, .75, na.rm = T),
+    max = max(outcome, na.rm = T),
+    .by = period)
+  
+# Dynamic trend (ratio, diff)
+
+data_sample <- data |> 
+  select(donor_id, recipient_id, ratio, diff, period) |> 
+  fmutate(period = factor(period),
+          group = paste(donor_id, recipient_id, sep = "_"))
+#  filter(uniqueN(period) == 5, .by = group)
+
+summarize(data_sample,
+          share_zeroes = round(sum(ratio==0, na.rm = T) / length(ratio) * 100, 2),
+          .by = period)
+
+summarize(data_sample[ratio > 0,],
+    N = uniqueN(group),
+    min = min(ratio, na.rm = T),
+    Q1 = quantile(ratio, probs = .25, na.rm = T),
+    median = median(ratio, na.rm = T), 
+    mean = mean(ratio, na.rm = T),
+    Q3 = quantile(ratio, .75, na.rm = T),
+    max = max(ratio, na.rm = T),
+    .by = period)
+
+```
+
+## Share of non-State
+
+## Subsets
+
+### Donor type
+
+Boxplot facet
+
+```{r}
+
+data_crs |> distinct(donor_id, donor_name, bi_multi)
+
+```
+
+### Recipient income group
+
+```{r}
+
+data_crs |> distinct(recipient_id, recipient_name, incomegroup_name)
+
+```
 
