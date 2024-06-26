@@ -1028,7 +1028,7 @@ sample_dyad <- data_crs |>
 # select vars
 data_dyad.vars <- data_crs[, .(year, donor_id, recipient_id, sector_id, sector_name, purpose_id = purpose_code, purpose_name, crs_id, usd_commitment_defl, channel_nonstate, channel_nonstate_ngo, channel_nonstate_multi, n_projects)]
 # descriptive stats
-summary(data_dyad.outcomes)
+summary(data_dyad.vars)
 # check for negative commitments
 data_dyad.vars |> 
   filter(usd_commitment_defl < 0)  # 173 obs. have negative commitments
@@ -1054,7 +1054,6 @@ data_dyad.outcomes <- data_dyad.vars[, .(
 data_dyad.outcomes |> 
   filter(commitment < 0)
 # Note: once aggregated at the donor-recipient dyad level, there is only one observation with a small negative commitments
-
 
 ## MERGE full sample with outcome variables
 data_outcomes <- merge(sample_dyad, data_dyad.outcomes, 
@@ -1102,7 +1101,6 @@ summary(data_dyad)
 
 ```{r commitments}
 
-# create new vars for relative perioding (period) and lags (lag1)
 between_periods_comparison <- copy(data_dyad)
 between_periods_comparison <- between_periods_comparison[, .(donor_id, donor_name, recipient_id, recipient_name, year, commitment, treatment) 
 # create new variable `period` where treatment year = 0
@@ -1113,14 +1111,12 @@ between_periods_comparison <- between_periods_comparison[, .(donor_id, donor_nam
 # create new var `diff`
 ][, `:=` (
   diff = commitment - lag1,
-  ratio = ifelse(commitment > 0 & lag1 > 0, commitment / lag1, NA)
-)]
-
-data <- between_periods_comparison[period %in% c(-5:5)]
+  ratio = ifelse(commitment > 0 & lag1 > 0, commitment / lag1, NA))
+][period %in% c(-5:5)]
 
 # Level trend (commitment)
 
-data_sample <- data |> 
+data_sample <- between_periods_comparison |> 
   select(donor_id, recipient_id, commitment, period) |> 
   fmutate(period = factor(period),
           group = paste(donor_id, recipient_id, sep = "_"))
@@ -1148,7 +1144,7 @@ summarize(data_sample[commitment > 0,],
 
 ```{r}
  
-# create new vars for relative perioding (period) and lags (lag1)
+# select vars
 between_periods_comparison <- copy(data_dyad)
 between_periods_comparison <- between_periods_comparison[, .(donor_id, donor_name, 
                                                              recipient_id, recipient_name, 
@@ -1166,69 +1162,397 @@ between_periods_comparison <- between_periods_comparison[, .(donor_id, donor_nam
   ratio = ifelse(outcome > 0 & lag1 > 0, outcome / lag1, NA)
 )]
 
-data <- between_periods_comparison[period %in% c(-5:5)]
+data <- between_periods_comparison |> 
+  fmutate(
+  group = paste(donor_id, recipient_id, sep = "_"),
+  period = factor(period),
+  outcome = outcome
+  ) |> 
+  filter(period %in% c(-3:3)) |> 
+  filter(!length(group) < 7, .by = group)
 
-data |> 
-  filter(lag1 > 1) |> 
-  slice_max(ratio, n=5)
+## Level trend
 
-# Level trend (commitment)
+ggwithinstats(
+  data = data |> select(group, period, outcome),
+  x    = period,
+  y    = outcome,
+  type = "np",
+  ylab = "Millions, USD", 
+  title = "Commitments delivered through non-State channels",
+  subtitle = "within-subjects comparisons"
+)
 
-data_sample <- data |> 
-  select(donor_id, recipient_id, outcome, period) |> 
-  fmutate(period = factor(period),
-          group = paste(donor_id, recipient_id, sep = "_"))
-#  filter(uniqueN(period) == 5, .by = group)
+## Change trend
+# First difference
+ggwithinstats(
+  data = data |> select(group, period, diff),
+  x    = period,
+  y    = diff,
+  type = "np",
+  ylab = "Millions, USD", 
+  title = "First diff. of commitments delivered through non-State channels",
+  subtitle = "within-subjects comparisons"
+)
+# Ratio (t/t-1)
+ggwithinstats(
+  data = data |> select(group, period, ratio),
+  x    = period,
+  y    = ratio,
+  type = "np",
+  title = "Ratio between commitments delivered through non-State channels in t and t-1",
+  subtitle = "within-subjects comparisons",
+  caption = "Note: increase when ratio > 1 "
+)
 
-summarize(data_sample,
-          share_zeroes = round(sum(outcome==0, na.rm = T) / length(outcome) * 100, 2),
-          .by = period)
+```
 
-summarize(data_sample[outcome > 0,],
+#### NGO
+
+```{r}
+
+# select vars
+between_periods_comparison <- copy(data_dyad)
+between_periods_comparison <- between_periods_comparison[, .(donor_id, donor_name, 
+                                                             recipient_id, recipient_name, 
+                                                             year, 
+                                                             outcome = commit.channel_nonstate_ngo, 
+                                                             treatment)
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = .(donor_id, recipient_id)
+# create new var `lag1`
+][order(recipient_id, donor_id, year),
+][, lag1 := shift(outcome, type = "lag"), by = .(donor_id, recipient_id)
+# create new var `diff`
+][, `:=` (
+  diff = outcome - lag1,
+  ratio = ifelse(outcome > 0 & lag1 > 0, outcome / lag1, NA)
+)]
+
+data <- between_periods_comparison |> 
+  fmutate(
+  group = paste(donor_id, recipient_id, sep = "_"),
+  period = factor(period),
+  outcome = outcome
+  ) |> 
+  filter(period %in% c(-3:3)) |> 
+  filter(!length(group) < 7, .by = group)
+
+## Level trend
+
+ggwithinstats(
+  data = data |> select(group, period, outcome),
+  x    = period,
+  y    = outcome,
+  type = "np",
+  ylab = "Millions, USD", 
+  title = "Commitments delivered through NGOs",
+  subtitle = "within-subjects comparisons"
+)
+
+## Change trend
+# First difference
+ggwithinstats(
+  data = data |> select(group, period, diff),
+  x    = period,
+  y    = diff,
+  type = "np",
+  ylab = "Millions, USD", 
+  title = "First diff. of commitments delivered through NGOs",
+  subtitle = "within-subjects comparisons"
+)
+# Ratio (t/t-1)
+ggwithinstats(
+  data = data |> select(group, period, ratio),
+  x    = period,
+  y    = ratio,
+  type = "np",
+  title = "Ratio between commitments delivered through NGOs in t and t-1",
+  subtitle = "within-subjects comparisons",
+  caption = "Note: increase when ratio > 1 "
+)
+
+```
+
+#### Multilaterals
+
+```{r}
+
+# select vars
+between_periods_comparison <- copy(data_dyad)
+between_periods_comparison <- between_periods_comparison[, .(donor_id, donor_name, 
+                                                             recipient_id, recipient_name, 
+                                                             year, 
+                                                             outcome = commit.channel_nonstate_multi, 
+                                                             treatment)
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = .(donor_id, recipient_id)
+# create new var `lag1`
+][order(recipient_id, donor_id, year),
+][, lag1 := shift(outcome, type = "lag"), by = .(donor_id, recipient_id)
+# create new var `diff`
+][, `:=` (
+  diff = outcome - lag1,
+  ratio = ifelse(outcome > 0 & lag1 > 0, outcome / lag1, NA)
+)]
+
+data <- between_periods_comparison |> 
+  fmutate(
+  group = paste(donor_id, recipient_id, sep = "_"),
+  period = factor(period),
+  outcome = outcome
+  ) |> 
+  filter(period %in% c(-3:3)) |> 
+  filter(!length(group) < 7, .by = group)
+
+## Level trend
+
+ggwithinstats(
+  data = data |> select(group, period, outcome),
+  x    = period,
+  y    = outcome,
+  type = "np",
+  ylab = "Millions, USD", 
+  title = "Commitments delivered through Multilaterals",
+  subtitle = "within-subjects comparisons"
+)
+
+## Change trend
+# First difference
+ggwithinstats(
+  data = data |> select(group, period, diff),
+  x    = period,
+  y    = diff,
+  type = "np",
+  ylab = "Millions, USD", 
+  title = "First diff. of commitments delivered through Multilaterals",
+  subtitle = "within-subjects comparisons"
+)
+# Ratio (t/t-1)
+ggwithinstats(
+  data = data |> select(group, period, ratio),
+  x    = period,
+  y    = ratio,
+  type = "np",
+  title = "Ratio between commitments delivered through Multilaterals in t and t-1",
+  subtitle = "within-subjects comparisons",
+  caption = "Note: increase when ratio > 1 "
+)
+
+```
+
+
+## Share of non-State
+
+```{r}
+
+between_periods_comparison <- copy(data_dyad)
+between_periods_comparison <- between_periods_comparison[, .(donor_id, donor_name, 
+                                                             recipient_id, recipient_name, 
+                                                             year, 
+                                                             treatment,
+                                                             commitment, commit.channel_nonstate
+                                                             )
+# create new variable : share of non-State commitments in total commitments
+][, outcome := ifelse(
+    commitment > 0,
+    sum(commit.channel_nonstate, na.rm = T)/sum(commitment, na.rm = T) * 100,
+    NA), by = .(donor_id, recipient_id, year)
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = .(donor_id, recipient_id)
+# create new var `lag1`
+][order(recipient_id, donor_id, year),
+][, lag1 := shift(outcome, type = "lag"), by = .(donor_id, recipient_id)]
+
+data <- between_periods_comparison |> 
+  fmutate(
+  group = paste(donor_id, recipient_id, sep = "_"),
+  period = factor(period),
+  outcome = outcome
+  ) |> 
+  filter(period %in% c(-3:3)) |> 
+  filter(!length(group) < 7, .by = group)
+
+## Level trend
+
+ggwithinstats(
+  data = data |> select(group, period, outcome),
+  x    = period,
+  y    = outcome,
+  type = "np",
+  ylab = "%", 
+  title = "Share of commitments delivery through non-State channeled",
+  subtitle = "within-subjects comparisons"
+)
+
+```
+
+### NGOs
+
+```{r}
+
+between_periods_comparison <- copy(data_dyad)
+between_periods_comparison <- between_periods_comparison[, .(donor_id, donor_name, 
+                                                             recipient_id, recipient_name, 
+                                                             year, 
+                                                             treatment,
+                                                             commitment, commit.channel_nonstate_ngo
+                                                             )
+# create new variable : share of non-State commitments in total commitments
+][, outcome := ifelse(
+    commitment > 0,
+    sum(commit.channel_nonstate_ngo, na.rm = T)/sum(commitment, na.rm = T) * 100,
+    NA), by = .(donor_id, recipient_id, year)
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = .(donor_id, recipient_id)
+# create new var `lag1`
+][order(recipient_id, donor_id, year),
+][, lag1 := shift(outcome, type = "lag"), by = .(donor_id, recipient_id)
+# create new var `diff`
+][, `:=` (
+  diff = outcome - lag1,
+  ratio = ifelse(outcome > 0 & lag1 > 0, outcome / lag1, NA)
+)]
+
+data <- between_periods_comparison |> 
+  fmutate(
+  group = paste(donor_id, recipient_id, sep = "_"),
+  period = factor(period),
+  outcome = outcome
+  ) |> 
+  filter(period %in% c(-3:3)) |> 
+  filter(!length(group) < 7, .by = group)
+
+## Level trend
+
+ggwithinstats(
+  data = data |> select(group, period, outcome),
+  x    = period,
+  y    = outcome,
+  type = "np",
+  ylab = "%", 
+  title = "Share of commitments delivery through NGOs",
+  subtitle = "within-subjects comparisons"
+)
+
+```
+
+### non-State: Multilaterals
+
+```{r}
+
+between_periods_comparison <- copy(data_dyad)
+between_periods_comparison <- between_periods_comparison[, .(donor_id, donor_name, 
+                                                             recipient_id, recipient_name, 
+                                                             year, 
+                                                             treatment,
+                                                             commitment, commit.channel_nonstate_multi
+                                                             )
+# create new variable : share of non-State commitments in total commitments
+][, outcome := ifelse(
+    commitment > 0,
+    sum(commit.channel_nonstate_multi, na.rm = T)/sum(commitment, na.rm = T) * 100,
+    NA), by = .(donor_id, recipient_id, year)
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = .(donor_id, recipient_id)
+# create new var `lag1`
+][order(recipient_id, donor_id, year),
+][, lag1 := shift(outcome, type = "lag"), by = .(donor_id, recipient_id)]
+
+data <- between_periods_comparison |> 
+  fmutate(
+  group = paste(donor_id, recipient_id, sep = "_"),
+  period = factor(period),
+  outcome = outcome
+  ) |> 
+  filter(period %in% c(-3:3)) |> 
+  filter(!length(group) < 7, .by = group)
+
+## Level trend
+
+ggwithinstats(
+  data = data |> select(group, period, outcome),
+  x    = period,
+  y    = outcome,
+  type = "np",
+  ylab = "%", 
+  title = "Share of commitments delivery through Multilaterals",
+  subtitle = "within-subjects comparisons"
+)
+
+```
+
+## Subsets
+
+### Donor type
+
+```{r}
+
+facet_donor <- left_join(between_periods_comparison,
+      data_crs |> 
+        distinct(donor_id, bi_multi) |> 
+        filter(!(donor_id %in% c("0003", "0075") & bi_multi=="Private Sector")),
+      by = "donor_id"
+      ) |> 
+  relocate(bi_multi, .after = donor_name)
+
+data_sample <- facet_donor |> 
+  select(bi_multi, donor_id, recipient_id, outcome, diff, period) |> 
+  fmutate(group = paste(donor_id, recipient_id, sep = "_")) |> 
+  filter(period %in% c(-3:3))
+
+# Level trend
+
+test <- data_sample[outcome > 0,
+][, .(
     N = uniqueN(group),
     min = min(outcome, na.rm = T),
     Q1 = quantile(outcome, probs = .25, na.rm = T),
     median = median(outcome, na.rm = T), 
     mean = mean(outcome, na.rm = T),
     Q3 = quantile(outcome, .75, na.rm = T),
-    max = max(outcome, na.rm = T),
-    .by = period)
-  
-# Dynamic trend (ratio, diff)
+    max = max(outcome, na.rm = T)
+), by = .(bi_multi, period)
+][order(bi_multi)]
 
-data_sample <- data |> 
-  select(donor_id, recipient_id, ratio, diff, period) |> 
-  fmutate(period = factor(period),
-          group = paste(donor_id, recipient_id, sep = "_"))
-#  filter(uniqueN(period) == 5, .by = group)
+ggplot(test, aes(x=period)) +
+  geom_point(aes(y=median), shape=1) +
+  geom_point(aes(y=mean), shape=4) +
+  geom_linerange(aes(ymin=Q1, ymax=Q3)) +
+  geom_hline(yintercept = 0, linetype="dashed", color="grey") +
+  geom_vline(xintercept = 0, linetype="dotted", color="coral") +
+  facet_wrap(~bi_multi) +
+  theme_minimal() +
+  labs(
+    title = "Share of commitments delivered through non-State channels",
+    caption = "Median (circle), Mean (cross), Q1-Q3 (line range)",
+    y="% commitments")
 
-summarize(data_sample,
-          share_zeroes = round(sum(ratio==0, na.rm = T) / length(ratio) * 100, 2),
-          .by = period)
+# Dynamic trend
 
-summarize(data_sample[ratio > 0,],
+test <- data_sample[, .(
     N = uniqueN(group),
-    min = min(ratio, na.rm = T),
-    Q1 = quantile(ratio, probs = .25, na.rm = T),
-    median = median(ratio, na.rm = T), 
-    mean = mean(ratio, na.rm = T),
-    Q3 = quantile(ratio, .75, na.rm = T),
-    max = max(ratio, na.rm = T),
-    .by = period)
+    min = min(diff, na.rm = T),
+    Q1 = quantile(diff, probs = .25, na.rm = T),
+    median = median(diff, na.rm = T), 
+    mean = mean(diff, na.rm = T),
+    Q3 = quantile(diff, .75, na.rm = T),
+    max = max(diff, na.rm = T)
+), by = .(bi_multi, period)
+][order(bi_multi)]
 
-```
-
-## Share of non-State
-
-## Subsets
-
-### Donor type
-
-Boxplot facet
-
-```{r}
-
-data_crs |> distinct(donor_id, donor_name, bi_multi)
+ggplot(test, aes(x=period)) +
+  geom_point(aes(y=median), shape=1) +
+  geom_point(aes(y=mean), shape=4) +
+  geom_linerange(aes(ymin=Q1, ymax=Q3)) +
+  geom_hline(yintercept = 0, linetype="dashed", color="grey") +
+  geom_vline(xintercept = 0, linetype="dotted", color="coral") +
+  facet_wrap(~bi_multi) +
+  theme_minimal() +
+  labs(
+    title = "change proportion",
+    caption = "Median (circle), Mean (cross), Q1-Q3 (line range)",
+    y="Change in %p")
 
 ```
 
@@ -1236,7 +1560,343 @@ data_crs |> distinct(donor_id, donor_name, bi_multi)
 
 ```{r}
 
-data_crs |> distinct(recipient_id, recipient_name, incomegroup_name)
+facet_recip <- left_join(between_periods_comparison,
+                         data_crs |> distinct(recipient_id, incomegroup_name),
+                         by = "recipient_id") |> 
+  relocate(incomegroup_name, .after = recipient_name)
+
+data_sample <- facet_recip |> 
+  select(incomegroup = incomegroup_name, donor_id, recipient_id, outcome, diff, period) |> 
+  fmutate(group = paste(donor_id, recipient_id, sep = "_"))
+
+# Level trend
+
+test <- data_sample[outcome > 0,
+][, .(
+    N = uniqueN(group),
+    min = min(outcome, na.rm = T),
+    Q1 = quantile(outcome, probs = .25, na.rm = T),
+    median = median(outcome, na.rm = T), 
+    mean = mean(outcome, na.rm = T),
+    Q3 = quantile(outcome, .75, na.rm = T),
+    max = max(outcome, na.rm = T)
+), by = .(incomegroup, period)
+][order(incomegroup, period)]
+
+ggplot(test, aes(x=period)) +
+  geom_point(aes(y=median), shape=1) +
+  geom_point(aes(y=mean), shape=4) +
+  geom_linerange(aes(ymin=Q1, ymax=Q3)) +
+  geom_hline(yintercept = 0, linetype="dashed", color="grey") +
+  geom_vline(xintercept = 0, linetype="dotted", color="coral") +
+  facet_wrap(~incomegroup) +
+  theme_minimal() +
+  labs(
+    title = "Share of commitments delivered through non-State channels",
+    caption = "Median (circle), Mean (cross), Q1-Q3 (line range)",
+    y="% commitments")
+
+# Dynamic trend
+
+test <- data_sample[, .(
+    N = uniqueN(group),
+    min = min(diff, na.rm = T),
+    Q1 = quantile(diff, probs = .25, na.rm = T),
+    median = median(diff, na.rm = T), 
+    mean = mean(diff, na.rm = T),
+    Q3 = quantile(diff, .75, na.rm = T),
+    max = max(diff, na.rm = T)
+), by = .(incomegroup, period)
+][order(incomegroup, period)]
+
+ggplot(test, aes(x=period)) +
+  geom_point(aes(y=median), shape=1) +
+  geom_point(aes(y=mean), shape=4) +
+  geom_linerange(aes(ymin=Q1, ymax=Q3)) +
+  geom_hline(yintercept = 0, linetype="dashed", color="grey") +
+  geom_vline(xintercept = 0, linetype="dotted", color="coral") +
+  facet_wrap(~incomegroup) +
+  theme_minimal() +
+  labs(
+    title = "Share of commitments delivered through non-State channels",
+    caption = "Median (circle), Mean (cross), Q1-Q3 (line range)",
+    y="% commitments")
 
 ```
+
+## Number of projects
+
+```{r}
+
+between_periods_comparison <- copy(data_dyad)
+between_periods_comparison <- between_periods_comparison[, .(donor_id, donor_name, 
+                                                             recipient_id, recipient_name, 
+                                                             year, 
+                                                             treatment,
+                                                             outcome = n_projects
+                                                             )
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = .(donor_id, recipient_id)
+# create new var `lag1`
+][order(recipient_id, donor_id, year),
+][, lag1 := shift(outcome, type = "lag"), by = .(donor_id, recipient_id)
+# create new var `diff`
+][, `:=` (
+  diff = outcome - lag1,
+  ratio = ifelse(outcome > 0 & lag1 > 0, outcome / lag1, NA)
+)]
+
+data <- between_periods_comparison |> 
+  fmutate(
+  group = paste(donor_id, recipient_id, sep = "_"),
+  period = factor(period),
+  outcome = outcome
+  ) |> 
+  filter(period %in% c(-3:3)) |> 
+  filter(!length(group) < 7, .by = group)
+
+## Level trend
+
+ggwithinstats(
+  data = data |> select(group, period, outcome),
+  x    = period,
+  y    = outcome,
+  type = "np",
+  ylab = "# of projects", 
+  title = "Number of projects",
+  subtitle = "within-subjects comparisons"
+)
+
+## Change trend
+# First difference
+ggwithinstats(
+  data = data |> select(group, period, diff),
+  x    = period,
+  y    = diff,
+  type = "np",
+  ylab = "# of projects", 
+  title = "First diff. of the number of projects",
+  subtitle = "within-subjects comparisons"
+)
+# Ratio (t/t-1)
+ggwithinstats(
+  data = data |> select(group, period, ratio),
+  x    = period,
+  y    = ratio,
+  type = "np",
+  ylab = "Ratio", 
+  title = "Ratio between # projects in t and t-1",
+  subtitle = "within-subjects comparisons",
+  caption = "Note: increase when ratio > 1 "
+)
+
+```
+
+## Number of purposes
+
+```{r}
+
+between_periods_comparison <- copy(data_dyad)
+between_periods_comparison <- between_periods_comparison[, .(donor_id, donor_name, 
+                                                             recipient_id, recipient_name, 
+                                                             year, 
+                                                             treatment,
+                                                             outcome = n_purpose
+                                                             )
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = .(donor_id, recipient_id)
+# create new var `lag1`
+][order(recipient_id, donor_id, year),
+][, lag1 := shift(outcome, type = "lag"), by = .(donor_id, recipient_id)
+# create new var `diff`
+][, `:=` (
+  diff = outcome - lag1,
+  ratio = ifelse(outcome > 0 & lag1 > 0, outcome / lag1, NA)
+)]
+
+data <- between_periods_comparison |> 
+  fmutate(
+  group = paste(donor_id, recipient_id, sep = "_"),
+  period = factor(period),
+  outcome = outcome
+  ) |> 
+  filter(period %in% c(-3:3)) |> 
+  filter(!length(group) < 7, .by = group)
+
+## Level trend
+
+ggwithinstats(
+  data = data |> select(group, period, outcome),
+  x    = period,
+  y    = outcome,
+  type = "np",
+  ylab = "# of purposes", 
+  title = "Number of purposes",
+  subtitle = "within-subjects comparisons"
+)
+
+## Change trend
+# First difference
+ggwithinstats(
+  data = data |> select(group, period, diff),
+  x    = period,
+  y    = diff,
+  type = "np",
+  ylab = "# of purposes", 
+  title = "First diff. of the number of purposes",
+  subtitle = "within-subjects comparisons"
+)
+# Ratio (t/t-1)
+ggwithinstats(
+  data = data |> select(group, period, ratio),
+  x    = period,
+  y    = ratio,
+  type = "np",
+  ylab = "Ratio", 
+  title = "Ratio between # purposes in t and t-1",
+  subtitle = "within-subjects comparisons",
+  caption = "Note: increase when ratio > 1 "
+)
+
+```
+
+## Number of projects
+
+```{r}
+
+between_periods_comparison <- copy(data_dyad)
+between_periods_comparison <- between_periods_comparison[, .(donor_id, donor_name, 
+                                                             recipient_id, recipient_name, 
+                                                             year, 
+                                                             treatment,
+                                                             outcome = n_projects
+                                                             )
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = .(donor_id, recipient_id)
+# create new var `lag1`
+][order(recipient_id, donor_id, year),
+][, lag1 := shift(outcome, type = "lag"), by = .(donor_id, recipient_id)
+# create new var `diff`
+][, `:=` (
+  diff = outcome - lag1,
+  ratio = ifelse(outcome > 0 & lag1 > 0, outcome / lag1, NA)
+)]
+
+data <- between_periods_comparison |> 
+  fmutate(
+  group = paste(donor_id, recipient_id, sep = "_"),
+  period = factor(period),
+  outcome = outcome
+  ) |> 
+  filter(period %in% c(-3:3)) |> 
+  filter(!length(group) < 7, .by = group)
+
+## Level trend
+
+ggwithinstats(
+  data = data |> select(group, period, outcome),
+  x    = period,
+  y    = outcome,
+  type = "np",
+  ylab = "# of projects", 
+  title = "Number of projects",
+  subtitle = "within-subjects comparisons"
+)
+
+## Change trend
+# First difference
+ggwithinstats(
+  data = data |> select(group, period, diff),
+  x    = period,
+  y    = diff,
+  type = "np",
+  ylab = "# of projects", 
+  title = "First diff. of the number of projects",
+  subtitle = "within-subjects comparisons"
+)
+# Ratio (t/t-1)
+ggwithinstats(
+  data = data |> select(group, period, ratio),
+  x    = period,
+  y    = ratio,
+  type = "np",
+  ylab = "Ratio", 
+  title = "Ratio between # projects in t and t-1",
+  subtitle = "within-subjects comparisons",
+  caption = "Note: increase when ratio > 1 "
+)
+
+```
+
+## Size of projects
+
+```{r}
+
+between_periods_comparison <- copy(data_dyad)
+between_periods_comparison <- between_periods_comparison[, .(donor_id, donor_name, 
+                                                             recipient_id, recipient_name, 
+                                                             year, 
+                                                             treatment,
+                                                             outcome = size_projects
+                                                             )
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = .(donor_id, recipient_id)
+# create new var `lag1`
+][order(recipient_id, donor_id, year),
+][, lag1 := shift(outcome, type = "lag"), by = .(donor_id, recipient_id)
+# create new var `diff`
+][, `:=` (
+  diff = outcome - lag1,
+  ratio = ifelse(outcome > 0 & lag1 > 0, outcome / lag1, NA)
+)]
+  
+data <- between_periods_comparison |> 
+  fmutate(
+  group = paste(donor_id, recipient_id, sep = "_"),
+  period = factor(period),
+  outcome = log10(outcome)
+  ) |> 
+  filter(period %in% c(-3:3)) |> 
+  filter(!length(group) < 7, .by = group)
+
+## Level trend
+
+ggwithinstats(
+  data = data |> select(group, period, outcome),
+  x    = period,
+  y    = outcome,
+  type = "np",
+  ylab = "Millions, USD (log10)", 
+  title = "Avg size of projects"
+)
+
+## Change trend
+# First difference
+ggwithinstats(
+  data = data |> select(group, period, diff, outcome),
+  x    = period,
+  y    = diff,
+  type = "np",
+  ylab = "Millions, USD", 
+  title = "First diff. of the avg size of projects"
+)
+
+```
+
+# Unit-level: sector-recipient-year
+
+## Commitments through non-State channels
+
+```{r}
+
+```
+
+## Share of commitments through non-State channels
+
+```{r}
+
+```
+
+
+
 
