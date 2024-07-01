@@ -1,0 +1,754 @@
+---
+title: "Point thèse"
+format: 
+  docx:
+    fig-width: 8
+    fig-height: 6
+editor: visual
+date: "2024-07-01"
+execute:
+  echo: false
+  warning: false
+---
+
+```{r}
+# packages
+source(here::here('scripts', 'library.R'))
+# data
+load(here('data', 'data_oecd_crs_clean.RData'))
+load(here('data', 'data_emdat_clean.RData'))
+```
+
+# 1. Treatment assignment mechanism
+
+-   Binary (treated/not treated)
+
+-   Switching (i.e. on/off)
+
+```{r select_binary_switching_treatment}
+## EM-DAT (treatment)
+# select vars of interest
+recip_binary_treatment <- data_emdat[, .(recipient_id, 
+                                        year = start_year, 
+                                        clim_event, 
+                                        treatment_all = switching_event_dummy, 
+                                        treatment_appeal = switching_appeal_dummy)]
+```
+
+Climate and weather extreme events listed as such by the[@ipcc2023] and included in EM-DAT:
+
+-   temperature extremes (nat-met-ext);
+
+-   pluvial floods (nat-hyd-flo);
+
+-   river floods (nat-hyd-flo);
+
+-   drought (nat-cli-dro)
+
+-   storms (including tropical cyclones) (nat-met-sto);
+
+-   compound events (multivariate and concurrent extremes)
+
+> Note: 'Heavy precipitation' is also considered as an climate and weather extreme events, however EM-DAT doesn't include a specific category for it. 'Flood' can be considered the closest related category.
+
+```{r}
+
+# filter for weather and climate events
+recip_binary_climate_treatment <- recip_binary_treatment[clim_event == 1
+# summarize to get unit-level: recipient-year
+][, .(
+  treat_all = max(treatment_all, na.rm = T),
+  treat_appeal = max(treatment_appeal, na.rm = T)
+), by = .(recipient_id, year)]
+
+```
+
+## 1.1 Treatment status
+
+```{r}
+
+## OECD CRS (outcome variables)
+# define full sample at the recipient-year level
+sample_recipient <- data_crs |> 
+  expand(nesting(recipient_id, recipient_name, cohort_recipient), year) |> 
+  filter(!grepl("regional", recipient_name)) |> # remove "regional" recipients
+  fmutate(universe = ifelse(cohort_recipient <= year, 1, 0)) |> 
+  setDT()
+
+# summarize outcome to get unit-level: recipient-year
+data_recip.outcomes <- data_crs[, .(recipient_id, year, usd_commitment_defl)
+][, .(commit = sum(usd_commitment_defl, na.rm = T)), by = .(recipient_id, year)]
+
+# merge outcome data
+data_outcome <- merge(sample_recipient, data_recip.outcomes, 
+                       by=c("recipient_id", "year"), 
+                       all.x = TRUE) |> 
+  mutate(commit = ifelse(universe == 1 & is.na(commit), 0, commit)) # distinguish between non/active units of observations.
+
+```
+
+```{r}
+
+# merge outcome with treatment data
+data_recip.binary_treatment <- merge(data_outcome, recip_binary_climate_treatment, 
+                                            by=c("recipient_id", "year"), 
+                                            all.x = T) |> 
+  mutate(across(starts_with("treat"), ~ 
+            ifelse(universe == 1 & is.na(.), 0, .))) |> 
+  mutate(across(starts_with("treat"), ~ 
+            ifelse(universe == 0, NA, .)))
+
+```
+
+### 1.1.1 All events
+
+Here, three criteria defined the treatment (cf. the treatment assignment mechanism above): (1) the occurence of a disaster included in one of the EM-DAT categories defined as a climate and weather extreme event by the IPCC; (2) binary; (3) switching/on-off.
+
+```{r}
+
+# all events - binary
+panelView::panelview(1 ~ treat_all, # 
+          data = data_recip.binary_treatment, index = c("recipient_name","year"), 
+          xlab = "Year", ylab = "Number of Countries",
+          legend.labs = c("Control Recipients", 
+                          "Treated Recipients",
+                          "Missing"),
+          main = "Treatment Status: all climate and weather events",
+          by.timing = TRUE,
+          collapse.history = "TRUE")
+
+```
+
+> Note: most recipient countries have been treated multiple times and over subsequent periods. This makes any attempt to define a treatment assignment mechanism for causal inference very complex.
+
+To limit the number of treated periods per country, I follow a two-stage approach:
+
+### 1.1.2 Events *leading to an international assistance call ("appeal")*
+
+First, I restrict the sample to disasters which have led to an international assistance call ("appeal") by the affected country's government. We can assume that the most extreme events are more likely to push recipient governments to call for international assistance.
+
+```{r treatment_status}
+
+# international assistance call ("appeal") events - binary
+panelView::panelview(1 ~ treat_appeal, # 
+          data = data_recip.binary_treatment, index = c("recipient_name","year"), 
+          xlab = "Year", ylab = "Number of Countries",
+          legend.labs = c("Control Recipients", 
+                          "Treated Recipients",
+                          "Missing"),
+          main = "Treatment Status: climate and weather events\nleading to an international call for assistance",
+          by.timing = TRUE,
+          collapse.history = "TRUE")
+
+```
+
+> Note: the average number of treatment periods per country has decreased drastically. However, a large sample are part of more than one treatment cohorts (i.e., the have faced more than one disaster) over the period.
+
+### 1.1.3 *Unique* events leading to an international assistance call ("appeal") 
+
+Second, I restrict the sample to countries which have been affected by maximum one disaster over the period (i.e. 0 or 1).
+
+List of the countries with only one treatment period in the sample:
+
+```{r}
+
+# sum number of treated years by recipient
+names_recip.appeal.binary_single_treatment <- data_recip.binary_treatment[, .( 
+  treated_year_N = sum(treat_appeal, na.rm = T) # appeal only
+), by = recipient_name
+# order by number of treated years
+][order(-treated_year_N)
+# keep names of single-treated recipients
+][treated_year_N == 1, recipient_name]
+  
+# only keep recipients w/ a single treated year
+data_recip.appeal.binary_single_treatment <- data_recip.binary_treatment[recipient_name %in% names_recip.appeal.binary_single_treatment, ]
+
+# list single treated recipients
+unique(data_recip.appeal.binary_single_treatment$recipient_name)
+
+```
+
+```{r}
+
+# international assistance call ("appeal") events - binary
+panelView::panelview(1 ~ treat_appeal, # 
+          data = data_recip.appeal.binary_single_treatment, index = c("recipient_name","year"), 
+          xlab = "Year", ylab = "Number of Countries",
+          legend.labs = c("Control Recipients", 
+                          "Treated Recipients",
+                          "Missing"),
+          main = "Treatment Status: unique climate and weather event\nleading to an international call for assistance",
+          by.timing = TRUE,
+          collapse.history = "TRUE")
+
+```
+
+> Note: treatment cohorts include between 1 and 8 countries.
+
+# 2. Within-subject comparisons by period
+
+First, I list all donors and recipients registered in the OECD CRS data base.
+
+```{r}
+
+# Define full sample
+sample_dyad <- data_crs |> 
+  expand(nesting(donor_id, donor_name, cohort_donor),
+         nesting(recipient_id, recipient_name, cohort_recipient), 
+         year) |> 
+  filter(!grepl("regional", recipient_name)) |> # remove "regional" recipients
+  fmutate(universe = ifelse(cohort_donor <= year & cohort_recipient <= year, 1, 0)) |> # 
+  setDT()
+
+```
+
+Second, I transform observations with negative commitments (i.e. commitment withdrawals) to zeroes.
+
+```{r}
+
+## OECD CRS (outcome variables)
+data_dyad.vars <- copy(data_crs)
+# select vars
+data_dyad.vars <- data_dyad.vars[, .(year, 
+                                     donor_id, recipient_id, 
+                                     usd_commitment_defl,
+                                     channel_nonstate,
+                                     channel_nonstate_ngo,
+                                     channel_nonstate_multi,
+                                     sector_id, purpose_id = purpose_code,
+                                     crs_id
+                                     )]
+
+# convert negative values to zero
+data_dyad.na <- data_dyad.vars |>    
+  fmutate(usd_commitment_defl = ifelse(usd_commitment_defl < 0, 0, usd_commitment_defl))
+
+```
+
+> Note: while there are 173 obs. with negative commitments, from 5 donors and 65 recipients over the period in the initial data set, both their distinct and aggregated values remain low (\~ MUSD). Besides, only one observation remains with a small negative commitment once aggregated at the dyad level. Consequently, the conversion of negative values to zeroes should not bias the results.
+
+```{r}
+
+# check for negative commitments 
+# data_dyad.vars |>  
+# filter(usd_commitment_defl < 0)  # 173 obs. have negative commitments 
+# distinct(donor_id) |>  # from 5 donors 
+# distinct(recipient_id) # from 65 recipients  
+# data_dyad.outcomes |>  #  filter(commitment < 0) 
+
+# Note: once aggregated at the donor-recipient dyad level, there is only one observation with a small negative commitments 
+```
+
+Third, I define the main outcome variables at the level of the donor-recipient dyad.
+
+-   Total commitments, Millions, USD
+
+    -   Total commitments delivered through non-State channels, Millions, USD
+
+        -   Total commitments delivered through NGOs, Millions, USD
+
+        -   Total commitments delivered through Multilaterals, Millions, USD
+
+-   Share of commitments delivered through non-State channels, %
+
+    -   Share of commitments delivered through NGOs, %
+
+    -   Share of commitments delivered through Multilaterals, %
+
+-   Number of sectors (with positive commitments)
+
+    -   Number of sub-sectors ('purposes' from the OECD's code book) (with positive commitments)
+
+-   Number of projects (with positive commitments)
+
+    -   Average size of projects (with positive commitments), Millions, USD
+
+```{r}
+
+# summarize to get outcome vars at the donor-recipient-year level
+data_dyad.outcomes <- copy(data_dyad.na)
+data_dyad.outcomes <- data_dyad.outcomes[, .(
+# Intensive margin  
+# Commitments
+  commitment = sum(usd_commitment_defl, na.rm = T),
+# Commitments by channel type  
+  commit.channel_nonstate = sum(usd_commitment_defl[channel_nonstate=="1"], na.rm = T),
+  commit.channel_nonstate_ngo = sum(usd_commitment_defl[channel_nonstate_ngo=="1"], na.rm = T),
+  commit.channel_nonstate_multi = sum(usd_commitment_defl[channel_nonstate_multi=="1"], na.rm = T),
+# Extensive margin
+  n_sector = n_distinct(sector_id[usd_commitment_defl > 0]),
+  n_purpose = n_distinct(purpose_id[usd_commitment_defl > 0]),
+  n_project = n_distinct(crs_id[usd_commitment_defl > 0], na.rm = T)
+), .(donor_id, recipient_id, year)
+# Size of projects
+][, size_project := ifelse(commitment > 0, commitment / n_project, 0)
+# Share of commtiments delivered by channel type
+][, `:=` (
+sh_commit.channel_nonstate = case_when(
+  is.na(commitment) ~ NA,
+  commitment == 0 ~ 0,
+  !is.na(commitment) & commitment > 0 ~ commit.channel_nonstate/commitment * 100),
+sh_commit.channel_nonstate_ngo = case_when(
+  is.na(commitment) ~ NA,
+  commitment == 0 ~ 0,
+  !is.na(commitment) & commitment > 0 ~ commit.channel_nonstate_ngo/commitment * 100),
+sh_commit.channel_nonstate_multi = case_when(
+  is.na(commitment) ~ NA,
+  commitment == 0 ~ 0,
+  !is.na(commitment) & commitment > 0 ~ commit.channel_nonstate_multi/commitment * 100)
+)]
+
+```
+
+Fourth, I merge the list of all potential dyads by year with the outcome data set which includes total commitments aggregated at the donor-recipient dyad.
+
+Fifth, I specify 'real' zeroes. When both the donor and the recipient's cohorts (i.e. the year of the first registered projects in the OECD CRS data base) are prior to the project's year, missing values are converted to zeroes. In other words, missing values are only applied when the cohort of at least one side of the dyad comes after the project's year.
+
+```{r}
+
+data_outcomes <- merge(sample_dyad, data_dyad.outcomes, 
+                       by=c("donor_id", "recipient_id", "year"), 
+                       all.x = TRUE) |> 
+  arrange(recipient_id, year) |> 
+  mutate(across(starts_with("commit"), ~ ifelse(universe == 1 & is.na(.), 0, .))) |> # specify "real" zeroes, i.e., null values for existing dyads
+  select(-starts_with("cohort"))
+
+```
+
+Lastly, I merge the outcomes data set with the treatment data set.
+
+```{r}
+
+# define treatment data set
+data_treatment <- data_recip.appeal.binary_single_treatment[, .(recipient_id, year, treat_all, treat_appeal)]
+
+# rename treatment variable
+data_treatment <- rename(data_treatment, treatment = treat_appeal)
+
+# merge with outcome data set
+data_dyad <- merge(data_outcomes, data_treatment, by = c("recipient_id", "year"), all.x = T)[order(recipient_id, donor_id, year),][!is.na(treatment),]
+
+summary(data_dyad)
+```
+
+```{r}
+
+# create function
+summarySEwithin_and_plot <- function(variable) {
+  
+if(!variable %in% names(data_dyad)) {
+    stop(paste("Variable", variable, "not found."))
+  }
+  
+# select vars
+between_periods_comparison <- copy(data_dyad)
+between_periods_comparison <- between_periods_comparison[, .(donor_id, donor_name, 
+                                                             recipient_id, recipient_name, 
+                                                             year, 
+                                                             outcome = get(variable), 
+                                                             treatment)
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = .(donor_id, recipient_id)]
+
+data <- between_periods_comparison |> 
+  fmutate(
+  group = paste(donor_id, recipient_id, sep = "_"),
+  period = factor(period),
+  outcome = outcome
+  ) |> 
+  filter(period %in% c(-3:3)) |> 
+  filter(!length(group) < 7, .by = group)
+
+## Level trend
+dat_summary <- Rmisc::summarySEwithin(data,
+                 measurevar = "outcome",
+                 withinvars = "period",
+                 idvar = "group",
+                 na.rm = TRUE)
+
+p <- ggplot(dat_summary, aes(x = period, y = outcome)) + 
+  geom_point(color = "black") +
+  geom_errorbar(aes(y = outcome, ymin = outcome - ci, ymax = outcome + ci),
+                    color = "black", width = 0.05) +
+  theme_minimal()
+  
+# retour plot
+
+return(p)
+
+}
+```
+
+## 2.1 Commitments
+
+### 2.1.1 Total
+
+```{r commitments}
+
+summarySEwithin_and_plot("commitment") +
+  annotate("rect", xmin="-1", xmax="1", ymin=0, ymax=25, alpha=.1, fill="blue") +
+  labs(title="Total commitments",
+       subtitle="Level: donor-recipient dyad",
+       y="Millions, USD",
+       caption="Conf. int. = .95. Method from Morey (2008) is used for within-subjects comparison.")
+
+```
+
+**Graph reading**: increasing trend before treatment (time trend), small break in trend in t=0, recovery in t=1 and t=2, then decline in t=3.
+
+**Comment**: short-term effect of the treatment, where the outcome returns to the pre-treatment trend from t=1. However, the decline in t=3 raises the question whether of the post-emergency trend. Is reconstruction following the emergency phase or do we observe a recovery in "M"?
+
+### 2.1.2 Non-State
+
+```{r}
+ 
+summarySEwithin_and_plot("commit.channel_nonstate") +
+  annotate("rect", xmin="-1", xmax="1", ymin=0, ymax=5, alpha=.1, fill="blue") +
+  labs(title="Commitments trough non-State channels",
+       subtitle="Level: donor-recipient dyad",
+       y="Millions, USD",
+       caption="Conf. int. = .95. Method from Morey (2008) is used for within-subjects comparison.")
+
+```
+
+**Graph reading**: increasing trend before treatment (time trend), level of commitments increases significantly at t=0, then follows a decreasing trend until t=2, then returns to a level equivalent to that at t=0 at t=3.
+
+**Comment**: clear observable impact of the treatment in t=0. However, the effect on the pre-treatment trend is not obvious when looking at t=3. It seems more like a short term surge in t=0, going back to pre-treatment trend (or a slightly lower trend) in the following periods.
+
+#### 2.1.2.1 NGOs
+
+```{r}
+
+summarySEwithin_and_plot("commit.channel_nonstate_ngo") + 
+  annotate("rect", xmin="-1", xmax="1", ymin=0, ymax=2.5, alpha=.1, fill="blue") +
+  labs(title="Commitments delivered trough NGOs",
+       subtitle="Level: donor-recipient dyad",
+       y="Millions, USD",
+       caption="Conf. int. = .95. Method from Morey (2008) is used for within-subjects comparison.")
+
+```
+
+**Graph reading**: same trend than for the aggregated non-State channels above, with a significant impact of treatment in t=0.
+
+**Comment**: It raises the question of the post-treatment trend: back to pre-treatment or stagnation?
+
+#### 2.1.2.2 Multilaterals
+
+```{r}
+
+summarySEwithin_and_plot("commit.channel_nonstate_multi") + 
+  annotate("rect", xmin="-1", xmax="1", ymin=0, ymax=2.5, alpha=.1, fill="blue") +
+  labs(title="Commitments delivered trough Multilaterals",
+       subtitle="Level: donor-recipient dyad",
+       y="Millions, USD",
+       caption="Conf. int. = .95. Method from Morey (2008) is used for within-subjects comparison.")
+
+```
+
+**Graph reading**: same trend than for the aggregated non-State channels and NGOs above.
+
+**Comment**: same as above. Do we see a different between earmarked and un-earmarked funds? Between the two different types of earmarked funds (institutional sub-accounts vs. pass-through providers)?
+
+## 2.3 Share of commitments delivered through non-State channels
+
+```{r}
+
+# create function
+measure.prop_summarySEwithin_and_plot <- function(variable) {
+  
+# select vars
+dt <- copy(data_dyad)
+between_periods_comparison <- dt[, .(donor_id, donor_name, 
+                                     recipient_id, recipient_name, 
+                                     year, 
+                                     treatment,
+                                     commitment, var = get(variable))
+# create new variable : share of non-State commitments in total commitments
+][, outcome := case_when(
+  is.na(commitment) ~ NA,
+  commitment == 0 ~ 0,
+  !is.na(commitment) & commitment > 0 ~ sum(var, na.rm = T)/sum(commitment, na.rm = T) * 100
+), by = .(donor_id, recipient_id, year)
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = .(donor_id, recipient_id)]
+
+data <- between_periods_comparison |> 
+  fmutate(
+  group = paste(donor_id, recipient_id, sep = "_"),
+  period = factor(period),
+  outcome = outcome
+  ) |> 
+  filter(period %in% c(-3:3)) |> 
+  filter(!length(group) < 7, .by = group)
+
+## Level trend
+dat_summary <- Rmisc::summarySEwithin(data,
+                 measurevar = "outcome",
+                 withinvars = "period",
+                 idvar = "group",
+                 na.rm = TRUE)
+
+p <- ggplot(dat_summary, aes(x = period, y = outcome)) + 
+  geom_point(color = "black") +
+  geom_errorbar(aes(y = outcome, ymin = outcome - ci, ymax = outcome + ci),
+                    color = "black", width = 0.05) +
+  theme_minimal()
+  
+# retour plot
+
+return(p)
+
+}
+```
+
+### 2.3.1 Total
+
+```{r}
+
+measure.prop_summarySEwithin_and_plot("commit.channel_nonstate") + 
+  annotate("rect", xmin="-1", xmax="1", ymin=0, ymax=25, alpha=.1, fill="blue") +
+  labs(title="Share of commitments delivered through non-State channels",
+       subtitle="Level: donor-recipient dyad",
+       y="%",
+       caption="Conf. int. = .95. Method from Morey (2008) is used for within-subjects comparison.")
+
+```
+
+**Graph reading**: increasing pre-treatment trend (time trend). No observable impact of treatment in t=0, slowing trend in t=1, flattening trend in t=2 and t=3.
+
+**Comment**: no clear interpretation. No impact? But if so, how to explain the lack of strong effect on overall commitments but the significant one on commitments delivered through non-State channels? Is it that the volume of and/or the effect on latter are too small?
+
+#### 2.3.1.1 By donor type
+
+```{r}
+
+between_periods_comparison <- copy(data_dyad)
+between_periods_comparison <- between_periods_comparison[, .(donor_id, donor_name, 
+                                                             recipient_id, recipient_name, 
+                                                             year, 
+                                                             treatment,
+                                                             commitment, commit.channel_nonstate
+                                                             )
+# create new variable : share of non-State commitments in total commitments
+][, outcome := ifelse(
+    commitment > 0,
+    sum(commit.channel_nonstate, na.rm = T)/sum(commitment, na.rm = T) * 100,
+    NA), by = .(donor_id, recipient_id, year)
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = .(donor_id, recipient_id)]
+
+# add donor type variable
+facet_donor <- left_join(between_periods_comparison,
+      data_crs |> 
+        distinct(donor_id, bi_multi) |> 
+        filter(!(donor_id %in% c("0003", "0075") & bi_multi=="Private Sector")),
+      by = "donor_id"
+      ) |> 
+  relocate(bi_multi, .after = donor_name)
+
+data <- facet_donor |> 
+  fmutate(
+  group = paste(donor_id, recipient_id, sep = "_"),
+  period = factor(period),
+  outcome = outcome
+  ) |> 
+  filter(period %in% c(-3:3)) |> 
+  filter(!length(group) < 7, .by = group)
+
+
+## Level trend
+dat_summary <- Rmisc::summarySEwithin(data,
+                 measurevar = "outcome",
+                 withinvars = c("bi_multi", "period"),
+                 idvar = "group",
+                 na.rm = TRUE)
+
+ggplot(dat_summary, aes(x = period, y = outcome)) + 
+  geom_point(color = "black") +
+  geom_errorbar(aes(y = outcome, ymin = outcome - ci, ymax = outcome + ci),
+                    color = "black", width = 0.05) +
+  facet_wrap(~bi_multi) +
+  annotate("rect", xmin="-1", xmax="1", ymin=0, ymax=55, alpha=.1, fill="blue") +
+  theme_minimal() +
+  labs(title="Share of commitments delivered through non-State channels\nBy donor type",
+       subtitle="Level: donor-recipient dyad",
+       y="%",
+       caption="Conf. int. = .95. Method from Morey (2008) is used for within-subjects comparison.")
+
+```
+
+**Graph reading**: observable differences between donor type. Increasing pre-treatment trends for both bilateral and multilateral donors (no clear pre-treatment trend for private sector donors). Positive impact of treatment on the outcome in t=-1 for both bilateral and multilateral donor, even though it is clearer for the former (no clear impact for private sector donors or slightly decreasing in the short-term).
+
+**Comment**: the impact of the treatment seems to occur as soon as t-1. Several explanations could explain this: measurement error in the year attributed to disasters, donors have started committed new funds before the recipient government declared a state of emergency (and call for external assistance), good forecasting leading to investments in preparedness, etc. This stresses the need to use a physical measure of the extreme events.
+
+#### 2.3.1.2 By recipient income group
+
+```{r}
+
+between_periods_comparison <- copy(data_dyad)
+between_periods_comparison <- between_periods_comparison[, .(donor_id, donor_name, 
+                                                             recipient_id, recipient_name, 
+                                                             year, 
+                                                             treatment,
+                                                             commitment, commit.channel_nonstate
+                                                             )
+# create new variable : share of non-State commitments in total commitments
+][, outcome := ifelse(
+    commitment > 0,
+    sum(commit.channel_nonstate, na.rm = T)/sum(commitment, na.rm = T) * 100,
+    NA), by = .(donor_id, recipient_id, year)
+# create new variable `period` where treatment year = 0
+][, period := year - year[treatment==1], by = .(donor_id, recipient_id)]
+
+# add recipient income group variable
+facet_recip <- left_join(between_periods_comparison,
+                         data_crs |> distinct(recipient_id, incomegroup_name),
+                         by = "recipient_id") |> 
+  relocate(incomegroup_name, .after = recipient_name)
+
+data <- facet_recip |> 
+  fmutate(
+  group = paste(donor_id, recipient_id, sep = "_"),
+  period = factor(period),
+  outcome = outcome
+  ) |> 
+  filter(period %in% c(-3:3)) |> 
+  filter(!length(group) < 7, .by = group)
+
+## Level trend
+dat_summary <- Rmisc::summarySEwithin(data,
+                 measurevar = "outcome",
+                 withinvars = c("incomegroup_name", "period"),
+                 idvar = "group",
+                 na.rm = TRUE)
+
+ggplot(dat_summary, aes(x = period, y = outcome)) + 
+  geom_point(color = "black") +
+  geom_errorbar(aes(y = outcome, ymin = outcome - ci, ymax = outcome + ci),
+                    color = "black", width = 0.05) +
+  annotate("rect", xmin="-1", xmax="1", ymin=0, ymax=50, alpha=.1, fill="blue") +
+  facet_wrap(~incomegroup_name) +
+  theme_minimal() +
+  labs(title="Share of commitments delivered through non-State channels\nBy recipient income group",
+       subtitle="Level: donor-recipient dyad. Grouped by recipients' income groups",
+       y="%",
+       caption="Conf. int. = .95. Method from Morey (2008) is used for within-subjects comparison.")
+
+```
+
+**Graph reading**: similar trend for each income group, with a flat pre-treatment trend, a small change in trend level in t=-1 or t=0, and a flat post-treatment trend.
+
+**Comment**: the "treatment effect" seems more obvious in t=-1 for LDCs and in t=0 for MADCTs. Most MADCTs are SIDS, can it be related? Maybe is it due to different disaster types (fast-onset, such as tropical storms, in SIDS)? Or maybe (international) NGOs are more likely to be already on the ground in LDCs, so it is faster to channel funds to them before/once a disaster heats?
+
+### 2.3.2 Channel of delivery
+
+#### 2.3.2.1 NGOs
+
+```{r}
+
+measure.prop_summarySEwithin_and_plot("commit.channel_nonstate_ngo") + 
+  annotate("rect", xmin="-1", xmax="1", ymin=0, ymax=15, alpha=.1, fill="blue") +
+  labs(title="Share of commitments delivered through NGOs",
+       subtitle="Level: donor-recipient dyad",
+       y="%",
+       caption="Conf. int. = .95. Method from Morey (2008) is used for within-subjects comparison.")
+
+```
+
+**Graph reading**: change in trend (level) in t=-1, and a flat post-treatment trend.
+
+**Comment**: is it really a change in trend (level) in t=1 or t=0 or only a lower average level in t=-2? In any case, the pre- and post-treatment trends differ.
+
+#### 2.3.2.2 Multilaterals
+
+```{r}
+
+measure.prop_summarySEwithin_and_plot("commit.channel_nonstate_multi") + 
+  annotate("rect", xmin="-1", xmax="1", ymin=0, ymax=12, alpha=.1, fill="blue") +
+  labs(title="Share of commitments delivered through Multilaterals",
+       subtitle="Level: donor-recipient dyad",
+       y="%",
+       caption="Conf. int. = .95. Method from Morey (2008) is used for within-subjects comparison.")
+
+```
+
+**Graph reading**: change in trend (level) in t=0, and a flat post-treatment trend.
+
+**Comment**: it tends to reinforce the hypothesis that what we observed above in t=-1 is not an anticipation effect, but is only due to a lower level in t=-2. Here, the change in trend and trend level in t=0 is clearer. The share of commitments delivered through multilateral donors increase the same year the disaster occurs, but this share tends to stagnate in the following periods. Again, there might be differences between un/earmarked funds.
+
+## 2.4 Projects
+
+### 2.4.1 Number
+
+```{r}
+
+summarySEwithin_and_plot("n_project") + 
+  annotate("rect", xmin="-1", xmax="1", ymin=0, ymax=30, alpha=.1, fill="blue") +
+  labs(title="Number of projects",
+       subtitle="Level: donor-recipient dyad",
+       y="# projects",
+       caption="Conf. int. = .95. Method from Morey (2008) is used for within-subjects comparison.")
+
+```
+
+**Graph reading**: it is not clear if the observable change in level observed in t=0 is due to the treatment effect, a lower average level in t=-1, or an anticipation effect leading to the latter. However, there seems to be a difference between pre- and post-treatment trends.
+
+**Comment**: it is not possible to say if the treatment leads to an increase in the number of projects in t=0. However, the number of project per dyad is increasing pre-treatment and seems to stagnate post-treatment. This would imply more concentration (or less fragmentation) of funds in recipient countries.
+
+### 2.4.2 Average size
+
+```{r}
+
+summarySEwithin_and_plot("size_project") + 
+  annotate("rect", xmin="-1", xmax="1", ymin=0, ymax=6, alpha=.1, fill="blue") +
+  labs(title="Average size of projects",
+       subtitle="Level: donor-recipient dyad",
+       y="Millions, USD",
+       caption="Conf. int. = .95. Method from Morey (2008) is used for within-subjects comparison.")
+
+```
+
+**Graph reading**: no clear trend, except maybe a small decrease in the average size of projects in t=0 and an increase in t=1 and t=2 (tbc).
+
+**Comment**: no clear observable effect of treatment on the average size of projects.
+
+## 2.5 Sectors
+
+### 2.5.1 Number of sectors
+
+```{r}
+
+summarySEwithin_and_plot("n_sector") + 
+  annotate("rect", xmin="-1", xmax="1", ymin=0, ymax=7, alpha=.1, fill="blue") +
+  labs(title="Average number of sectors w/ positive commitments",
+       subtitle="Level: donor-recipient dyad",
+       y="# sectors",
+       caption="Conf. int. = .95. Method from Morey (2008) is used for within-subjects comparison.")
+
+```
+
+**Graph reading**: no clear trend, except maybe a flattening post-treatment trend?
+
+**Comment**: no clear observable effect of treatment on the average number of sectors with positive commitments. This would imply that disasters have no (or a small negative) effect on the extensive margin of donors' portfolio in affected countries.
+
+### 2.5.2 Number of purposes
+
+```{r}
+
+summarySEwithin_and_plot("n_purpose") + 
+  annotate("rect", xmin="-1", xmax="1", ymin=0, ymax=11, alpha=.1, fill="blue") +
+  labs(title="Average number of sub-sectors ('purposes') w/ positive commitments",
+       subtitle="Level: donor-recipient dyad",
+       y="# sub-sectors (purposes)",
+       caption="Conf. int. = .95. Method from Morey (2008) is used for within-subjects comparison.")
+
+```
+
+**Graph reading**: no clear trend, except maybe a flattening post-treatment trend?
+
+**Comment**: no clear observable effect of treatment on the average number of sub-sectors ("purposes") with positive commitments.
+
+------------------------------------------------------------------------
+
+Note: the same analysis was conducted a the donor-recipient-sector tryad level, with no significant change in the results.
